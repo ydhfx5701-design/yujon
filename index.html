@@ -1,0 +1,2907 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+<title>램프토크</title>
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%237c5cff'/%3E%3Ctext x='50' y='66' font-size='50' text-anchor='middle' fill='white'%3E✨%3C/text%3E%3C/svg%3E" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<style>
+  html, body { margin:0; padding:0; background:#0a0a0e; height:100%; overscroll-behavior:none; }
+  #root { height:100%; min-height:100vh; color:#8d8b9c; font-family:-apple-system,sans-serif; display:flex; align-items:center; justify-content:center; text-align:center; padding:20px; box-sizing:border-box; }
+</style>
+</head>
+<body>
+<div id="root">불러오는 중… (몇 초 걸릴 수 있어요)</div>
+<script>
+  window.addEventListener("error", function (e) {
+    var root = document.getElementById("root");
+    if (root) {
+      root.style.display = "block";
+      root.innerHTML = "<pre style='color:#e5607a; white-space:pre-wrap; font-size:12px; text-align:left;'>오류 발생:\n" +
+        (e.message || e.error || e) + "\n\n파일: " + (e.filename || "") + " 줄: " + (e.lineno || "") + "</pre>";
+    }
+  });
+</script>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef, useMemo, useCallback } = React;
+
+// lucide-react 없이 순수 웹페이지로 돌리기 위한 간단한 아이콘 대체(글자 기반)
+function makeIcon(glyph) {
+  return function Icon({ size = 16, className, style, fill, ...rest }) {
+    return React.createElement("span", {
+      className, style: { fontSize: size, lineHeight: 1, display: "inline-flex", ...style }, ...rest,
+    }, glyph);
+  };
+}
+const Plus = makeIcon("＋"), MessageCircle = makeIcon("💬"), HomeIcon = makeIcon("🏠"), PenSquare = makeIcon("✏️"),
+  Edit2 = makeIcon("✏️"), Trash2 = makeIcon("🗑️"), Send = makeIcon("➤"), X = makeIcon("✕"),
+  ChevronLeft = makeIcon("‹"), ChevronDown = makeIcon("⌄"), ChevronRight = makeIcon("›"), Loader2 = makeIcon("⟳"),
+  Menu = makeIcon("☰"), Check = makeIcon("✓"), Users = makeIcon("👥"), AlignLeft = makeIcon("📝"),
+  Sparkles = makeIcon("✨"), Camera = makeIcon("📷"), RotateCcw = makeIcon("↺"), LogOut = makeIcon("🚪"),
+  Crop = makeIcon("⤢"), Search = makeIcon("🔍"), ListChecks = makeIcon("📋"), Bookmark = makeIcon("🔖"),
+  ImageIcon = makeIcon("🖼️"), BookOpen = makeIcon("📖"), Heart = makeIcon("❤️"), Briefcase = makeIcon("💼"),
+  ShoppingBag = makeIcon("🛍️"), Gift = makeIcon("🎁"), Download = makeIcon("⬇️"), Upload = makeIcon("⬆️"),
+  Copy = makeIcon("📋"), Cloud = makeIcon("☁️");
+
+/* =========================================================
+   LampTalk v8
+   - 상태창: 날짜・시간은 코드로 직접 계산(항상 자연스럽게 흐름),
+     장소・날씨는 옮기지 않는 한 유지, 캐릭터별 상태는 한 명씩
+     따로 물어봐서 서로 헷갈리지 않게 함
+   - 선물 받으면 실제로 그 선물에 반응(대화 기록에 상황을 포함)
+   - 캐릭터도 사용자에게 선물 가능 -> 인벤토리(선물)
+   - 인벤토리 아이템: 사용하기 / 선물하기
+   - 상점 · 알바 추가 버튼을 항상 보이는 하단 고정 위치로 이동
+   - 알바・의뢰에 날짜/시간 지정, 하루 최대 2회 제한, 동행 약속 표시
+========================================================= */
+
+const MODEL = "claude-sonnet-4-6";
+const MAX_CHARACTERS = 20;
+const MAX_IMAGES = 5;
+const MAX_LORE = 5;
+const MEMORY_EVERY = 5;
+const STATUS_EVERY = 3; // API 호출을 아끼기 위해 상태창은 매턴이 아니라 3턴마다 생성
+const MAX_RESPONDERS = 4;
+const AFFECTION_MIN = 0;
+const AFFECTION_MAX = 100;
+const AFFECTION_DEFAULT = 50;
+const START_CREDITS = 1000;
+const MAX_JOBS_PER_DAY = 2;
+
+const genId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+const STYLE_FIELDS = [
+  { key: "mood", emoji: "😀", label: "기분" },
+  { key: "condition", emoji: "❤️‍🩹", label: "컨디션" },
+  { key: "outfit", emoji: "👔", label: "착장" },
+  { key: "pose", emoji: "🧍", label: "포즈" },
+  { key: "goal", emoji: "🎯", label: "목표" },
+  { key: "relationship", emoji: "🤝", label: "관계성" },
+  { key: "innerThoughts", emoji: "💭", label: "속마음" },
+  { key: "belongings", emoji: "🎒", label: "소지품" },
+];
+const SCENE_FIELDS = [
+  ["date", "📅", "날짜"], ["time", "⏰", "시간"], ["weather", "☁️", "날씨"],
+  ["location", "📍", "장소"], ["situation", "🎬", "상황"],
+];
+const DEFAULT_STYLE_CONFIG = {
+  scene: true, mood: true, condition: true, outfit: false, pose: false,
+  goal: true, relationship: true, innerThoughts: true, belongings: false,
+};
+const STYLE_FIELD_HINTS = {
+  mood: "지금 이 순간 겉으로 드러나는 감정 상태",
+  condition: "몸 상태나 컨디션",
+  outfit: "지금 입고 있는 옷차림",
+  pose: "지금 취하고 있는 자세나 몸짓",
+  goal: "지금 이 장면에서 이루고 싶은 목표",
+  relationship: "사용자를 향한 현재 태도나 관계",
+  innerThoughts: "겉으로 한 말과는 다를 수 있는, 캐릭터가 진짜 속으로 생각하고 있는 솔직한 속마음. 1인칭 반말체로, 실제로 방금 한 대사와 대비되게 써줘",
+  belongings: "지금 몸에 지니고 있는 소지품",
+};
+
+/* ---------------- API ---------------- */
+function getApiKey() {
+  return localStorage.getItem("lamptalk:apiKey") || "";
+}
+function apiHeaders() {
+  return {
+    "Content-Type": "application/json",
+    "x-api-key": getApiKey(),
+    "anthropic-version": "2023-06-01",
+    "anthropic-dangerous-direct-browser-access": "true",
+  };
+}
+async function callClaude(system, messages, maxTokens = 1000) {
+  if (!getApiKey()) throw new Error("API 키가 설정되지 않았어요. 설정에서 키를 입력해주세요.");
+  const safeMessages = messages && messages.length > 0 ? messages : [{ role: "user", content: "..." }];
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: apiHeaders(),
+    body: JSON.stringify({ model: MODEL, max_tokens: maxTokens, system, messages: safeMessages }),
+  });
+  if (!res.ok) {
+    let detail = "";
+    try {
+      const errJson = await res.json();
+      detail = errJson?.error?.message || errJson?.error?.type || "";
+    } catch { /* 응답 본문이 JSON이 아닐 수 있음 */ }
+    throw new Error(`API 요청 실패 (${res.status})${detail ? ": " + detail : ""}`);
+  }
+  const data = await res.json();
+  return (data.content || [])
+    .map((b) => (b.type === "text" ? b.text : ""))
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+// 한 번 실패해도 잠깐 쉬었다가 다시 시도 - 일시적인 서버/네트워크 오류에 대비 (최대 3번 시도)
+async function callClaudeWithRetry(system, messages, maxTokens = 1000, retriesLeft = 2, attempt = 0) {
+  try {
+    return await callClaude(system, messages, maxTokens);
+  } catch (e) {
+    if (retriesLeft > 0) {
+      await new Promise((r) => setTimeout(r, 900 * (attempt + 1)));
+      return callClaudeWithRetry(system, messages, maxTokens, retriesLeft - 1, attempt + 1);
+    }
+    throw e;
+  }
+}
+
+// 캐릭터의 대사에서 "사용자에게 실제로 물건을 선물했는지"를 저비용으로 판별
+async function detectGiftFromReply(reply) {
+  const triggerWords = ["선물", "건네", "줄게", "받아", "선물이야", "선물해", "선물로", "줄까"];
+  if (!reply || !triggerWords.some((w) => reply.includes(w))) return null;
+  const sys = "당신은 롤플레잉 대사를 분석해서, 캐릭터가 방금 사용자에게 실제로 구체적인 물건을 선물로 건넸는지 판단하는 도우미입니다. 대사에서 캐릭터가 사용자에게 명확히 물건을 선물한 것이 확실하면 그 물건 이름만 한 단어~짧은 구로 답하고, 그게 아니면(그냥 선물 이야기를 하거나 감정 표현일 뿐이면) 정확히 \"NONE\"이라고만 답하세요. 다른 설명은 절대 쓰지 마세요.";
+  try {
+    const raw = await callClaude(sys, [{ role: "user", content: `대사: ${reply}` }], 30);
+    const t = raw.trim().replace(/^["'“”]+|["'“”]+$/g, "");
+    if (!t || t.toUpperCase() === "NONE") return null;
+    return t.slice(0, 20);
+  } catch (e) { console.error(e); return null; }
+}
+
+function normalizeHistory(raw) {
+  const arr = [...raw];
+  while (arr.length && arr[0].role === "assistant") arr.shift();
+  const merged = [];
+  for (const m of arr) {
+    if (merged.length && merged[merged.length - 1].role === m.role) {
+      merged[merged.length - 1].content += "\n" + m.content;
+    } else {
+      merged.push({ role: m.role, content: m.content });
+    }
+  }
+  return merged;
+}
+
+function buildPersonaSystem(character, memoryText, profile, extraContext) {
+  return [
+    `당신은 롤플레잉 채팅 캐릭터 "${character.name}"입니다.`,
+    `캐릭터 설명(성격/말투/외형/배경): ${character.description || "(설명 없음)"}`,
+    profile?.name
+      ? `\n대화 상대(사용자)의 이름은 "${profile.name}"입니다.${
+          profile.description ? ` 사용자에 대한 설명: ${profile.description}` : ""
+        } 이 정보를 자연스럽게 대화에 녹여서 활용하세요.`
+      : "",
+    memoryText ? `\n[캐릭터가 반드시 기억하고 있어야 하는 것]\n${memoryText}` : "",
+    extraContext || "",
+    `\n말투/형식 규칙:`,
+    `- 행동, 표정, 몸짓, 상황 묘사는 반드시 별표 한 개로 감싸서 표현하세요. 예: *총구를 살짝 내리며* 그게 무슨 소리야?`,
+    `- 지금은 실제로 같은 공간에 함께 있는 장면입니다. 사용자가 먼저 "*카톡으로 대화 중*"처럼 메신저 상황을 명시하지 않는 한 '채팅창', '타이핑하며', '메시지를 보내며', '휴대폰을 보며' 같은 채팅앱・메신저를 연상시키는 표현은 절대 쓰지 마세요. 캐릭터들은 서로 마주보고 표정과 몸짓으로 대화합니다.`,
+    `- 동작 묘사와 대사를 소설처럼 자연스럽게 섞어 쓰되, 별표 규칙은 반드시 지키세요.`,
+    `- "${character.name}"의 1인칭 캐릭터에서 벗어나지 말고, 스스로를 AI・언어모델이라고 언급하지 마세요.`,
+    `- 답변은 2~5문장 내외로 몰입감 있게, 대화 흐름을 자연스럽게 이어가세요.`,
+    `- 기억하고 있는 정보와 모순되는 말을 하지 마세요.`,
+  ].filter(Boolean).join("\n");
+}
+
+function getLoreContext(loreBooks, text) {
+  if (!text) return "";
+  const hits = [];
+  for (const lb of loreBooks) {
+    for (const entry of lb.entries || []) {
+      if ((entry.keywords || []).some((k) => k && text.includes(k))) {
+        hits.push(`- ${entry.title ? entry.title + ": " : ""}${entry.content}`);
+      }
+    }
+  }
+  return hits.slice(0, 10).join("\n");
+}
+
+function parseScriptedInput(raw, characters) {
+  const lines = raw.split("\n");
+  const segments = [];
+  let buffer = [];
+  const flushUser = () => {
+    if (buffer.length) { segments.push({ type: "user", content: buffer.join("\n") }); buffer = []; }
+  };
+  for (const line of lines) {
+    const m = line.match(/^@([^:：]+)[:：]\s*(.*)$/);
+    if (m) {
+      const nameRaw = m[1].trim();
+      const char = characters.find((c) => c.name === nameRaw) ||
+        characters.find((c) => c.name.startsWith(nameRaw) || nameRaw.startsWith(c.name));
+      if (char && m[2].trim()) {
+        flushUser();
+        segments.push({ type: "character", characterId: char.id, content: m[2].trim() });
+        continue;
+      }
+    }
+    buffer.push(line);
+  }
+  flushUser();
+  return segments;
+}
+
+/* ---------------- 배경(장면) 상태 - 날짜/시간은 코드로 직접 계산 ---------------- */
+function nowDateTime() {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  const hh = String(now.getHours()).padStart(2, "0");
+  const mm = String(now.getMinutes()).padStart(2, "0");
+  return { date: `${y}-${m}-${d}`, time: `${hh}:${mm}` };
+}
+function formatDateLabel(dateStr) {
+  if (!dateStr) return "";
+  const days = ["일", "월", "화", "수", "목", "금", "토"];
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const dt = new Date(y, (m || 1) - 1, d || 1);
+  return `${dateStr}(${days[dt.getDay()]})`;
+}
+function advanceClock(dateStr, timeStr, deltaMinutes) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const [hh, mm] = timeStr.split(":").map(Number);
+  const dt = new Date(y, m - 1, d, hh, mm);
+  dt.setMinutes(dt.getMinutes() + deltaMinutes);
+  const ny = dt.getFullYear(), nm = String(dt.getMonth() + 1).padStart(2, "0"), nd = String(dt.getDate()).padStart(2, "0");
+  const nh = String(dt.getHours()).padStart(2, "0"), nmin = String(dt.getMinutes()).padStart(2, "0");
+  return { date: `${ny}-${nm}-${nd}`, time: `${nh}:${nmin}` };
+}
+function DEFAULT_SCENE() {
+  const { date, time } = nowDateTime();
+  return { date, time, location: "", weather: "", situation: "" };
+}
+
+// 장소/날씨는 실제로 바뀌었다는 신호가 없으면 그대로 유지, 상황만 매번 새로 요약
+async function advanceAndDescribeScene(prevScene, recentText, showToast) {
+  const deltaMinutes = 2 + Math.floor(Math.random() * 7);
+  const fallback = nowDateTime();
+  const baseDate = prevScene?.date || fallback.date;
+  const baseTime = /^\d{1,2}:\d{2}$/.test(prevScene?.time || "") ? prevScene.time : fallback.time;
+  const { date, time } = advanceClock(baseDate, baseTime, deltaMinutes);
+  const sys = [
+    "당신은 롤플레잉 장면의 배경 정보를 관리하는 도우미입니다.",
+    "아래 형식을 정확히 지켜서 라벨 뒤에만 채우고, 다른 설명은 절대 추가하지 마세요.",
+    "장소: (대화 내용상 캐릭터들이 실제로 다른 장소로 이동했다면 새 장소를 쓰고, 이동하지 않았다면 정확히 \"동일\"이라고만 쓰세요)",
+    "날씨: (날씨가 실제로 바뀌었다면 새 날씨를 쓰고, 아니면 정확히 \"동일\"이라고만 쓰세요)",
+    "상황: (지금 이 순간 벌어지고 있는 일을 한 문장으로 요약)",
+  ].join("\n");
+  try {
+    const raw = await callClaude(sys, [{ role: "user", content: `현재 장소: ${prevScene.location || "알 수 없음"}\n현재 날씨: ${prevScene.weather || "알 수 없음"}\n최근 대화:\n${recentText}` }], 200);
+    let location = prevScene.location, weather = prevScene.weather, situation = prevScene.situation || "";
+    for (const line of raw.split("\n")) {
+      const m = line.match(/^([^:：]+)[:：]\s*(.*)$/);
+      if (!m) continue;
+      const label = m[1].trim(), val = m[2].trim();
+      if (label === "장소" && val && val !== "동일") location = val;
+      if (label === "날씨" && val && val !== "동일") weather = val;
+      if (label === "상황" && val) situation = val;
+    }
+    return { date, time, location, weather, situation };
+  } catch (e) {
+    console.error(e);
+    showToast?.("배경 상태를 갱신하지 못했어요");
+    return { date, time, location: prevScene.location, weather: prevScene.weather, situation: prevScene.situation || "" };
+  }
+}
+
+// 캐릭터 한 명씩 따로 물어봐서, 다른 캐릭터의 일과 착각하지 않게 함
+async function generateCharacterStatus(character, activeFields, recentText, showToast) {
+  if (activeFields.length === 0) return null;
+  const lines = activeFields.map((f) => `${f.label}: `).join("\n");
+  const hints = activeFields.map((f) => `- ${f.label}: ${STYLE_FIELD_HINTS[f.key]}`).join("\n");
+  const sys = [
+    `당신은 롤플레잉 캐릭터 "${character.name}"의 상태를 분석하는 도우미입니다.`,
+    `아래 항목은 반드시 "${character.name}" 본인에게 실제로 일어난 일과 "${character.name}" 자신의 대사・행동만 근거로 채우세요. 대화에 다른 캐릭터가 등장하더라도 그들에게 일어난 일을 "${character.name}"의 것으로 착각해서 쓰면 절대 안 됩니다.`,
+    hints ? `[각 항목의 의미]\n${hints}` : "",
+    "아래 형식을 정확히 지켜서 라벨 뒤에만 한국어로 채우고, 다른 설명은 절대 추가하지 마세요.",
+    lines,
+  ].filter(Boolean).join("\n\n");
+  try {
+    const raw = await callClaude(sys, [{ role: "user", content: `최근 대화:\n${recentText}` }], 300);
+    const labelToKey = Object.fromEntries(activeFields.map((f) => [f.label, f.key]));
+    const result = { characterId: character.id, name: character.name };
+    for (const line of raw.split("\n")) {
+      const m = line.match(/^([^:：]+)[:：]\s*(.*)$/);
+      if (!m) continue;
+      const key = labelToKey[m[1].trim()];
+      if (key && m[2].trim()) result[key] = m[2].trim();
+    }
+    return Object.keys(result).length > 2 ? result : null;
+  } catch (e) {
+    console.error(e);
+    showToast?.(`${character.name} 상태를 정리하지 못했어요`);
+    return null;
+  }
+}
+
+/* ---------------- storage (독립 실행용: localStorage 사용) ---------------- */
+const LS_PREFIX = "lamptalk:";
+async function storeGet(key) {
+  try { const v = localStorage.getItem(LS_PREFIX + key); return v ? JSON.parse(v) : null; }
+  catch { return null; }
+}
+async function storeSet(key, value) {
+  try { localStorage.setItem(LS_PREFIX + key, JSON.stringify(value)); return true; }
+  catch (e) { console.error("storage set failed", e); return false; }
+}
+async function storeDelete(key) {
+  try { localStorage.removeItem(LS_PREFIX + key); } catch { /* ignore */ }
+}
+async function storeListPrefix(prefix) {
+  try {
+    const keys = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(LS_PREFIX + prefix)) keys.push(k.slice(LS_PREFIX.length));
+    }
+    return keys;
+  } catch { return []; }
+}
+
+// 사이트를 나가거나 새 버전으로 넘어가도 잃어버리지 않게, 모든 데이터를 코드 하나로 내보내고/불러오기
+async function exportAllData() {
+  const [profileKeys, plotKeys, loreKeys, chatKeys] = await Promise.all([
+    storeListPrefix("profile:"), storeListPrefix("plot:"), storeListPrefix("lore:"), storeListPrefix("chat:"),
+  ]);
+  const allKeys = [...profileKeys, ...plotKeys, ...loreKeys, ...chatKeys];
+  const data = {};
+  for (const k of allKeys) {
+    const v = await storeGet(k);
+    if (v !== null) data[k] = v;
+  }
+  const json = JSON.stringify({ v: 1, data });
+  return btoa(unescape(encodeURIComponent(json)));
+}
+async function importAllData(code) {
+  const json = decodeURIComponent(escape(atob(code.trim())));
+  const parsed = JSON.parse(json);
+  if (!parsed || typeof parsed.data !== "object") throw new Error("invalid backup code");
+  for (const [k, v] of Object.entries(parsed.data)) {
+    await storeSet(k, v);
+  }
+}
+
+/* ---------------- image resize ---------------- */
+function resizeImageFile(file, maxDim = 360, quality = 0.6) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > height) {
+          if (width > maxDim) { height = Math.round((height * maxDim) / width); width = maxDim; }
+        } else if (height > maxDim) {
+          width = Math.round((width * maxDim) / height); height = maxDim;
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width; canvas.height = height;
+        canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      img.onerror = reject;
+      img.src = e.target.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+const makeImgObj = (src) => ({ id: genId(), src, scale: 1, x: 50, y: 50 });
+function normalizeImg(image) {
+  if (!image) return null;
+  if (typeof image === "string") return { src: image, scale: 1, x: 50, y: 50 };
+  if (image.src) return { src: image.src, scale: image.scale || 1, x: image.x ?? 50, y: image.y ?? 50 };
+  return null;
+}
+
+/* ---------------- misc ui bits ---------------- */
+function Avatar({ name, image, size = 40 }) {
+  const [broken, setBroken] = useState(false);
+  const initial = (name || "?").trim()[0] || "?";
+  const s = { width: size, height: size };
+  const img = normalizeImg(image);
+  if (img && !broken) {
+    return (
+      <div style={{ ...s, borderRadius: "50%", overflow: "hidden", flexShrink: 0 }}>
+        <img src={img.src} onError={() => setBroken(true)} alt={name}
+          style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: `${img.x}% ${img.y}%`, transform: `scale(${img.scale})`, transformOrigin: "center" }} />
+      </div>
+    );
+  }
+  return (
+    <div style={{ ...s, borderRadius: "50%", flexShrink: 0 }} className="lt-avatar-fallback">
+      <span style={{ fontSize: size * 0.4 }}>{initial}</span>
+    </div>
+  );
+}
+function StackAvatars({ people, size = 40 }) {
+  return (
+    <div style={{ display: "flex" }}>
+      {people.slice(0, 3).map((p, i) => (
+        <div key={p.id || i} style={{ marginLeft: i === 0 ? 0 : -size * 0.35, zIndex: 3 - i }}>
+          <Avatar name={p.name} image={p.images?.[0]} size={size} />
+        </div>
+      ))}
+    </div>
+  );
+}
+function renderMessageContent(text) {
+  const parts = (text || "").split(/(\*[^*]+\*)/g).filter((p) => p !== "");
+  return parts.map((p, i) =>
+    p.startsWith("*") && p.endsWith("*") && p.length > 1
+      ? <span key={i} className="lt-action">{p.slice(1, -1)}</span>
+      : <span key={i}>{p}</span>
+  );
+}
+function Toast({ toast }) {
+  if (!toast) return null;
+  return <div className="lt-toast">{toast}</div>;
+}
+function SwitchToggle({ on, onClick }) {
+  return <button className={"lt-switch" + (on ? " on" : "")} onClick={onClick}><span /></button>;
+}
+function bulletLines(text) {
+  return (text || "").split("\n").map((l) => l.replace(/^[-•*]\s*/, "").trim()).filter(Boolean);
+}
+function SettingsRow({ icon: Icon, label, value, onClick }) {
+  return (
+    <button className="lt-settings-row" onClick={onClick}>
+      <Icon size={17} />
+      <span className="lt-settings-row-label">{label}</span>
+      <span className="lt-settings-row-value">{value}</span>
+      <ChevronRight size={16} />
+    </button>
+  );
+}
+function affectionBand(v) {
+  if (v <= 19) return { label: "최악", color: "#e5607a" };
+  if (v <= 39) return { label: "나쁨", color: "#e08a5c" };
+  if (v <= 59) return { label: "보통", color: "#8d8b9c" };
+  if (v <= 79) return { label: "좋음", color: "#7c5cff" };
+  return { label: "최고", color: "#4ade80" };
+}
+
+/* ============================================================
+   ROOT APP
+============================================================ */
+function LampTalkApp() {
+  const [activeTab, setActiveTab] = useState("home");
+  const [stack, setStack] = useState([]);
+  const [profiles, setProfiles] = useState([]);
+  const [plots, setPlots] = useState([]);
+  const [loreBooks, setLoreBooks] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [toast, setToast] = useState(null);
+  const [confirmReq, setConfirmReq] = useState(null); // { message, onYes }
+  const toastTimer = useRef(null);
+
+  const askConfirm = useCallback((message, onYes) => setConfirmReq({ message, onYes }), []);
+
+  const showToast = useCallback((msg) => {
+    setToast(msg);
+    clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 1800);
+  }, []);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    const [profileKeys, plotKeys, loreKeys] = await Promise.all([
+      storeListPrefix("profile:"), storeListPrefix("plot:"), storeListPrefix("lore:"),
+    ]);
+    let profs = (await Promise.all(profileKeys.map(storeGet))).filter(Boolean);
+    if (profs.length === 0) {
+      const def = { id: genId(), name: "나", description: "", createdAt: Date.now() };
+      await storeSet(`profile:${def.id}`, def);
+      profs = [def];
+    }
+    const plts = (await Promise.all(plotKeys.map(storeGet))).filter(Boolean)
+      .sort((a, b) => (b.lastMessageAt || b.createdAt) - (a.lastMessageAt || a.createdAt));
+    const lores = (await Promise.all(loreKeys.map(storeGet))).filter(Boolean)
+      .sort((a, b) => a.createdAt - b.createdAt);
+    setProfiles(profs); setPlots(plts); setLoreBooks(lores);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  const push = (o) => setStack((s) => [...s, o]);
+  const pop = () => setStack((s) => s.slice(0, -1));
+  const popAll = () => setStack([]);
+  const goTab = (t) => { setActiveTab(t); popAll(); };
+
+  const patchPlot = async (plot) => {
+    await storeSet(`plot:${plot.id}`, plot);
+    setPlots((prev) => {
+      const rest = prev.filter((p) => p.id !== plot.id);
+      return [plot, ...rest].sort((a, b) => (b.lastMessageAt || b.createdAt) - (a.lastMessageAt || a.createdAt));
+    });
+    return plot;
+  };
+  const deletePlot = async (id) => {
+    await storeDelete(`plot:${id}`);
+    await storeDelete(`chat:${id}`);
+    setPlots((prev) => prev.filter((p) => p.id !== id));
+    popAll();
+    showToast("대화방을 삭제했어요");
+  };
+  const patchProfile = async (profile) => {
+    await storeSet(`profile:${profile.id}`, profile);
+    setProfiles((prev) => {
+      const exists = prev.some((p) => p.id === profile.id);
+      return exists ? prev.map((p) => (p.id === profile.id ? profile : p)) : [...prev, profile];
+    });
+    return profile;
+  };
+  const patchLore = async (lb) => {
+    await storeSet(`lore:${lb.id}`, lb);
+    setLoreBooks((prev) => {
+      const exists = prev.some((l) => l.id === lb.id);
+      return exists ? prev.map((l) => (l.id === lb.id ? lb : l)) : [...prev, lb];
+    });
+    return lb;
+  };
+  const deleteLore = async (id) => {
+    await storeDelete(`lore:${id}`);
+    setLoreBooks((prev) => prev.filter((l) => l.id !== id));
+  };
+
+  const openProfileForm = (profileId) => push({ screen: "profileform", profileId });
+
+  return (
+    <div className="lt-app">
+      <style>{CSS}</style>
+      {stack.length === 0 && <TopBar tab={activeTab} onOpenBackup={() => push({ screen: "backup" })} />}
+
+      <div className="lt-content">
+        {stack.length === 0 && activeTab === "home" && (
+          <HomeScreen plots={plots} loading={loading}
+            onOpenRoom={(id) => push({ screen: "chatroom", plotId: id })}
+            onNewPlot={() => push({ screen: "plotform" })} />
+        )}
+        {stack.length === 0 && activeTab === "chats" && (
+          <ChatsListScreen plots={plots} loading={loading}
+            onOpenRoom={(id) => push({ screen: "chatroom", plotId: id })}
+            onDeleteRoom={deletePlot}
+            askConfirm={askConfirm}
+            onNewPlot={() => push({ screen: "plotform" })} />
+        )}
+        {stack.length === 0 && activeTab === "create" && (
+          <CreateListScreen plots={plots} loading={loading}
+            onNewPlot={() => push({ screen: "plotform" })}
+            onEditPlot={(id) => push({ screen: "plotform", plotId: id })}
+            onOpenRoom={(id) => push({ screen: "chatroom", plotId: id })}
+            askConfirm={askConfirm}
+            onDeletePlot={deletePlot} />
+        )}
+
+        {stack.map((layer, idx) => (
+          <div className="lt-overlay-layer" key={idx} style={{ zIndex: 10 + idx }}>
+            {layer.screen === "plotform" && (
+              <PlotForm
+                plotId={layer.plotId}
+                plots={plots}
+                profiles={profiles}
+                loreBooks={loreBooks}
+                onBack={pop}
+                onSaved={async (plot, openRoom) => {
+                  await patchPlot(plot);
+                  if (openRoom) setStack([{ screen: "chatroom", plotId: plot.id }]);
+                  else pop();
+                  showToast("저장했어요");
+                }}
+                onDelete={layer.plotId ? () => {
+                  askConfirm("이 플롯과 대화 기록을 삭제할까요?", () => deletePlot(layer.plotId));
+                } : null}
+                onOpenProfileForm={openProfileForm}
+                onSaveLore={patchLore}
+                onDeleteLore={deleteLore}
+                askConfirm={askConfirm}
+                showToast={showToast}
+              />
+            )}
+            {layer.screen === "chatroom" && (
+              <ChatRoom
+                plot={plots.find((p) => p.id === layer.plotId)}
+                profiles={profiles}
+                loreBooks={loreBooks}
+                onBack={pop}
+                onExitToList={() => { popAll(); setActiveTab("chats"); }}
+                onPlotUpdated={patchPlot}
+                onDeleteRoom={deletePlot}
+                onOpenProfileForm={openProfileForm}
+                showToast={showToast}
+              />
+            )}
+            {layer.screen === "profileform" && (
+              <ProfileForm profileId={layer.profileId} profiles={profiles} onBack={pop}
+                onSaved={async (profile) => { await patchProfile(profile); pop(); showToast("대화 프로필을 저장했어요"); }} />
+            )}
+            {layer.screen === "backup" && (
+              <BackupScreen onBack={pop} showToast={showToast}
+                onImported={async () => { await refresh(); pop(); showToast("불러왔어요"); }} />
+            )}
+          </div>
+        ))}
+      </div>
+
+      {stack.length === 0 && <BottomNav active={activeTab} onChange={goTab} />}
+      {confirmReq && (
+        <div className="lt-confirm-overlay" onClick={() => setConfirmReq(null)}>
+          <div className="lt-confirm-box" onClick={(e) => e.stopPropagation()}>
+            <div className="lt-confirm-msg">{confirmReq.message}</div>
+            <div className="lt-confirm-actions">
+              <button className="lt-btn" onClick={() => setConfirmReq(null)}>취소</button>
+              <button className="lt-btn danger" onClick={() => { const f = confirmReq.onYes; setConfirmReq(null); f?.(); }}>확인</button>
+            </div>
+          </div>
+        </div>
+      )}
+      <Toast toast={toast} />
+    </div>
+  );
+}
+
+/* ---------------- top bar / bottom nav ---------------- */
+function TopBar({ tab, onOpenBackup }) {
+  const titles = { home: "램프토크", chats: "대화", create: "제작" };
+  return (
+    <div className="lt-topbar">
+      <div className="lt-topbar-mark"><Sparkles size={16} /></div>
+      <div className="lt-topbar-title">{titles[tab]}</div>
+      <button className="lt-topbar-backup" onClick={onOpenBackup} title="데이터 백업 / 복원"><Cloud size={17} /></button>
+    </div>
+  );
+}
+function BottomNav({ active, onChange }) {
+  const items = [
+    { id: "home", label: "홈", icon: HomeIcon },
+    { id: "chats", label: "대화", icon: MessageCircle },
+    { id: "create", label: "제작", icon: PenSquare },
+  ];
+  return (
+    <div className="lt-bottomnav">
+      {items.map((it) => {
+        const Icon = it.icon; const isActive = active === it.id;
+        return (
+          <button key={it.id} className={"lt-navbtn" + (isActive ? " active" : "")} onClick={() => onChange(it.id)}>
+            <Icon size={21} strokeWidth={isActive ? 2.4 : 1.8} />
+            <span>{it.label}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ============================================================
+   HOME / CHATS LIST / CREATE LIST
+============================================================ */
+function HomeScreen({ plots, loading, onOpenRoom, onNewPlot }) {
+  const recent = plots.slice(0, 6);
+  const totalChars = plots.reduce((s, p) => s + (p.characters?.length || 0), 0);
+  return (
+    <div className="lt-screen">
+      <div className="lt-hero">
+        <div className="lt-hero-glow"><Sparkles size={22} /></div>
+        <h1>안녕하세요 👋</h1>
+        <p>나만의 AI 캐릭터를 만들고, 기억하는 대화를 시작해보세요.</p>
+        <button className="lt-btn primary lt-hero-btn" onClick={onNewPlot}><Plus size={16} /> 새 플롯 만들기</button>
+      </div>
+      <div className="lt-stats-row">
+        <div className="lt-stat-card"><div className="lt-stat-num">{plots.length}</div><div className="lt-stat-label">내 플롯</div></div>
+        <div className="lt-stat-card"><div className="lt-stat-num">{totalChars}</div><div className="lt-stat-label">캐릭터</div></div>
+      </div>
+      <div className="lt-section-title">최근 대화</div>
+      {loading && <div className="lt-muted lt-pad">불러오는 중…</div>}
+      {!loading && recent.length === 0 && <div className="lt-empty-block">아직 대화가 없어요.<br />플롯을 만들어 첫 캐릭터와 이야기를 시작해보세요.</div>}
+      <div className="lt-recent-scroll">
+        {recent.map((p) => (
+          <div key={p.id} className="lt-recent-card" onClick={() => onOpenRoom(p.id)}>
+            <StackAvatars people={p.characters || []} size={44} />
+            <div className="lt-recent-title">{p.title}</div>
+            <div className="lt-recent-sub">{p.lastMessage || "대화를 시작해보세요"}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+function ChatsListScreen({ plots, loading, onOpenRoom, onDeleteRoom, onNewPlot, askConfirm }) {
+  return (
+    <div className="lt-screen no-pad-bottom">
+      <div className="lt-list-header"><span>대화방</span><button className="lt-iconbtn" onClick={onNewPlot}><Plus size={18} /></button></div>
+      {loading && <div className="lt-muted lt-pad">불러오는 중…</div>}
+      {!loading && plots.length === 0 && <div className="lt-empty-block">진행 중인 대화가 없어요.<br /><button className="lt-link" onClick={onNewPlot}>새 플롯 만들기</button></div>}
+      <div className="lt-room-list">
+        {plots.map((p) => (
+          <div key={p.id} className="lt-room-item" onClick={() => onOpenRoom(p.id)}>
+            <StackAvatars people={p.characters || []} size={48} />
+            <div className="lt-room-text">
+              <div className="lt-room-title">{p.title}</div>
+              <div className="lt-room-sub">{p.lastMessage || "대화를 시작해보세요"}</div>
+            </div>
+            <button className="lt-iconbtn ghost" onClick={(e) => { e.stopPropagation(); askConfirm(`'${p.title}' 대화방을 삭제할까요?`, () => onDeleteRoom(p.id)); }}>
+              <Trash2 size={15} />
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+function CreateListScreen({ plots, loading, onNewPlot, onEditPlot, onOpenRoom, onDeletePlot, askConfirm }) {
+  return (
+    <div className="lt-screen">
+      <button className="lt-create-cta" onClick={onNewPlot}>
+        <div className="lt-create-cta-icon"><Plus size={20} /></div>
+        <div><div className="lt-create-cta-title">새 플롯 만들기</div><div className="lt-create-cta-sub">캐릭터, 세계관, 첫 대사를 직접 설계해요</div></div>
+        <ChevronRight size={18} />
+      </button>
+      <div className="lt-section-title">내 플롯 ({plots.length})</div>
+      {loading && <div className="lt-muted lt-pad">불러오는 중…</div>}
+      {!loading && plots.length === 0 && <div className="lt-empty-block">아직 만든 플롯이 없어요.</div>}
+      <div className="lt-plot-grid">
+        {plots.map((p) => (
+          <div key={p.id} className="lt-plot-card">
+            <div className="lt-plot-card-top" onClick={() => onOpenRoom(p.id)}>
+              <StackAvatars people={p.characters || []} size={40} />
+              <div className="lt-plot-card-title">{p.title}</div>
+              <div className="lt-plot-card-sub">{(p.characters || []).length}명의 캐릭터</div>
+            </div>
+            <div className="lt-plot-card-actions">
+              <button className="lt-chip-btn" onClick={() => onEditPlot(p.id)}><Edit2 size={12} /> 수정</button>
+              <button className="lt-chip-btn" onClick={() => onOpenRoom(p.id)}><MessageCircle size={12} /> 대화</button>
+              <button className="lt-chip-btn danger" onClick={() => askConfirm(`'${p.title}' 플롯을 삭제할까요?`, () => onDeletePlot(p.id))}><Trash2 size={12} /></button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   PLOT FORM
+============================================================ */
+function PlotForm({ plotId, plots, profiles, loreBooks, onBack, onSaved, onDelete,
+  onOpenProfileForm, onSaveLore, onDeleteLore, askConfirm, showToast }) {
+  const initial = plotId ? plots.find((p) => p.id === plotId) : null;
+
+  const [title, setTitle] = useState(initial?.title || "");
+  const [description, setDescription] = useState(initial?.description || "");
+  const [intro, setIntro] = useState(initial?.intro || "");
+  const [characters, setCharacters] = useState(initial?.characters || []);
+  const [loreIds, setLoreIds] = useState(initial?.loreIds || []);
+  const [styleConfig, setStyleConfig] = useState(initial?.styleConfig || DEFAULT_STYLE_CONFIG);
+  const [shopItems, setShopItems] = useState(initial?.shopItems || []);
+  const [jobs, setJobs] = useState(initial?.jobs || []);
+  const [defaultProfileId, setDefaultProfileId] = useState(initial?.defaultProfileId || profiles[0]?.id || "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [editingCharId, setEditingCharId] = useState(null);
+  const [subScreen, setSubScreen] = useState(null);
+  const [editingLoreId, setEditingLoreId] = useState(null);
+
+  const sectionRefs = { info: useRef(null), chars: useRef(null) };
+  const scrollTo = (key) => sectionRefs[key]?.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+
+  const isNew = !initial;
+  const save = async () => {
+    if (!title.trim()) { setError("제목을 입력해주세요."); scrollTo("info"); return; }
+    if (characters.length === 0) { setError("캐릭터를 1명 이상 추가해주세요."); scrollTo("chars"); return; }
+    setError("");
+    setSaving(true);
+    const plot = {
+      id: initial?.id || genId(),
+      title: title.trim(), description: description.trim(), intro: intro.trim(),
+      characters, loreIds, styleConfig,
+      shopItems, jobs,
+      defaultProfileId,
+      lastMessage: initial?.lastMessage || "", lastMessageAt: initial?.lastMessageAt || null,
+      createdAt: initial?.createdAt || Date.now(),
+    };
+    // 새로 만드는 플롯일 때만 저장 후 바로 대화방으로 이동해요.
+    // 기존 플롯을 수정할 때는 대화방을 다시 불러오지 않고 그대로 목록으로 돌아가서,
+    // 진행 중이던 대화 내용이 절대 초기화되지 않게 해요.
+    await onSaved(plot, isNew);
+    setSaving(false);
+  };
+
+  const upsertCharacter = (char) => {
+    setCharacters((prev) => {
+      const exists = prev.some((c) => c.id === char.id);
+      return exists ? prev.map((c) => (c.id === char.id ? char : c)) : [...prev, char];
+    });
+    setEditingCharId(null);
+  };
+  const removeCharacterById = (id) => setCharacters((prev) => prev.filter((c) => c.id !== id));
+  const editingChar = editingCharId && editingCharId !== "NEW" ? characters.find((c) => c.id === editingCharId) : null;
+
+  const styleCount = (styleConfig.scene ? 1 : 0) + STYLE_FIELDS.filter((f) => styleConfig[f.key]).length;
+
+  return (
+    <div className="lt-screen-full">
+      <div className="lt-form-topbar">
+        <button className="lt-iconbtn" onClick={onBack}><X size={19} /></button>
+        <div className="lt-form-topbar-title">플롯</div>
+        <button className="lt-btn primary small" disabled={saving} onClick={() => save()}>
+          {saving ? <Loader2 size={14} className="lt-spin" /> : "등록"}
+        </button>
+      </div>
+
+      <div className="lt-form-scroll">
+        <div ref={sectionRefs.info} className="lt-form-section">
+          <div className="lt-section-title">기본 설정</div>
+          <label className="lt-field">
+            <span>제목 <em>({title.length}/20)</em></span>
+            <input value={title} onChange={(e) => setTitle(e.target.value.slice(0, 20))} placeholder="제목을 입력해주세요." />
+          </label>
+          <label className="lt-field">
+            <span>설명</span>
+            <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="상황, 관계, 세계관 등을 설명해주세요." rows={4} />
+          </label>
+        </div>
+
+        <div ref={sectionRefs.chars} className="lt-form-section">
+          <div className="lt-section-title">캐릭터</div>
+          {characters.length > 0 && (
+            <div className="lt-char-cards">
+              {characters.map((c) => (
+                <div key={c.id} className="lt-char-card" onClick={() => setEditingCharId(c.id)}>
+                  <Avatar name={c.name} image={c.images?.[0]} size={48} />
+                  <span>{c.name}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {editingCharId === null && characters.length < MAX_CHARACTERS && (
+            <button className="lt-add-char-tile" onClick={() => setEditingCharId("NEW")}>
+              <Plus size={22} /><span>캐릭터 추가 {characters.length}/{MAX_CHARACTERS}</span>
+            </button>
+          )}
+          {editingCharId !== null && (
+            <CharacterEditor key={editingCharId} initial={editingChar} showToast={showToast}
+              onCancel={() => setEditingCharId(null)}
+              onDelete={editingChar ? () => { removeCharacterById(editingChar.id); setEditingCharId(null); } : null}
+              onSave={upsertCharacter} />
+          )}
+        </div>
+
+        <div className="lt-form-section">
+          <div className="lt-section-title">추가 설정</div>
+          <div className="lt-muted" style={{ marginBottom: 2 }}>로어북・상태창 스타일・상점・알바・인트로는 각각 따로 눌러서 설정해요.</div>
+          <SettingsRow icon={BookOpen} label="로어북" value={loreIds.length > 0 ? `${loreIds.length}/${MAX_LORE} 연결됨` : "연결 안 함"} onClick={() => setSubScreen("lore")} />
+          <SettingsRow icon={ListChecks} label="스타일 · 상태창" value={styleCount > 0 ? `${styleCount}개 항목` : "사용 안 함"} onClick={() => setSubScreen("style")} />
+          <SettingsRow icon={ShoppingBag} label="상점" value={`${shopItems.length}개 아이템`} onClick={() => setSubScreen("shop")} />
+          <SettingsRow icon={Briefcase} label="알바・의뢰" value={`${jobs.length}개`} onClick={() => setSubScreen("jobs")} />
+          <SettingsRow icon={AlignLeft} label="인트로" value={intro.trim() ? "작성됨" : "미작성"} onClick={() => setSubScreen("intro")} />
+        </div>
+
+        <div className="lt-form-section" style={{ paddingBottom: 28 }}>
+          <div className="lt-section-title">플레이하는 유저가 사용할 대화 프로필</div>
+          <div className="lt-profile-chip-row">
+            {profiles.map((p) => (
+              <button key={p.id} className={"lt-profile-chip" + (defaultProfileId === p.id ? " on" : "")} onClick={() => setDefaultProfileId(p.id)}>
+                {p.name || "이름 없음"}
+              </button>
+            ))}
+            <button className="lt-profile-chip dashed" onClick={() => onOpenProfileForm(null)}><Plus size={13} /> 새 프로필</button>
+          </div>
+        </div>
+
+        {error && <div className="lt-error" style={{ margin: "0 16px 16px" }}>{error}</div>}
+        <div className="lt-form-bottom-actions">
+          <button className="lt-btn primary" disabled={saving} onClick={() => save()}>
+            {saving ? <Loader2 size={16} className="lt-spin" /> : <Check size={16} />} {isNew ? "등록하고 대화 시작" : "수정 완료"}
+          </button>
+          {onDelete && <button className="lt-btn danger" onClick={onDelete}><Trash2 size={16} /> 플롯 삭제</button>}
+        </div>
+      </div>
+
+      {subScreen === "style" && (
+        <div className="lt-overlay-layer" style={{ zIndex: 8 }}>
+          <StyleFormScreen config={styleConfig} onChange={setStyleConfig} onBack={() => setSubScreen(null)} />
+        </div>
+      )}
+      {subScreen === "shop" && (
+        <div className="lt-overlay-layer" style={{ zIndex: 8 }}>
+          <ShopFormScreen items={shopItems} onChange={setShopItems} onBack={() => setSubScreen(null)} showToast={showToast} />
+        </div>
+      )}
+      {subScreen === "jobs" && (
+        <div className="lt-overlay-layer" style={{ zIndex: 8 }}>
+          <JobsFormScreen jobs={jobs} characters={characters} onChange={setJobs} onBack={() => setSubScreen(null)} />
+        </div>
+      )}
+      {subScreen === "intro" && (
+        <div className="lt-overlay-layer" style={{ zIndex: 8 }}>
+          <IntroFormScreen intro={intro} onChange={setIntro} onBack={() => setSubScreen(null)} />
+        </div>
+      )}
+      {subScreen === "lore" && (
+        <div className="lt-overlay-layer" style={{ zIndex: 8 }}>
+          <LorePicker
+            selectedIds={loreIds} onChange={setLoreIds} loreBooks={loreBooks}
+            onBack={() => setSubScreen(null)}
+            onCreateNew={() => { setEditingLoreId("NEW"); setSubScreen("loreform"); }}
+            onEdit={(id) => { setEditingLoreId(id); setSubScreen("loreform"); }}
+            onDelete={(id, title) => askConfirm(`'${title}' 로어북을 삭제할까요?`, async () => { await onDeleteLore(id); setLoreIds((prev) => prev.filter((x) => x !== id)); })}
+          />
+        </div>
+      )}
+      {subScreen === "loreform" && (
+        <div className="lt-overlay-layer" style={{ zIndex: 9 }}>
+          <LoreForm
+            loreId={editingLoreId === "NEW" ? null : editingLoreId}
+            loreBooks={loreBooks}
+            onBack={() => setSubScreen("lore")}
+            onSaved={async (lb) => { await onSaveLore(lb); setSubScreen("lore"); }}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------------- 로어북 / 스타일 / 배경 / 인트로 / 상점 / 알바 : 별도 화면 ---------------- */
+function StyleFormScreen({ config, onChange, onBack }) {
+  return (
+    <div className="lt-screen-full">
+      <div className="lt-form-topbar">
+        <button className="lt-iconbtn" onClick={onBack}><ChevronLeft size={20} /></button>
+        <div className="lt-form-topbar-title">스타일 · 상태창</div>
+        <div style={{ width: 32 }} />
+      </div>
+      <div className="lt-form-scroll">
+        <div className="lt-form-section">
+          <div className="lt-muted">대화할 때마다 턴 마지막에 보여줄 상태창 항목을 선택하세요. 대화방 메뉴에서 언제든 켜고 끌 수 있어요.</div>
+          <div className="lt-toggle-row">
+            <span>🗓️ 배경 상태창 (날짜·시간·날씨·장소·상황)</span>
+            <SwitchToggle on={!!config.scene} onClick={() => onChange({ ...config, scene: !config.scene })} />
+          </div>
+          {STYLE_FIELDS.map((f) => (
+            <div key={f.key} className="lt-toggle-row">
+              <span>{f.emoji} {f.label}</span>
+              <SwitchToggle on={!!config[f.key]} onClick={() => onChange({ ...config, [f.key]: !config[f.key] })} />
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+function IntroFormScreen({ intro, onChange, onBack }) {
+  return (
+    <div className="lt-screen-full">
+      <div className="lt-form-topbar">
+        <button className="lt-iconbtn" onClick={onBack}><ChevronLeft size={20} /></button>
+        <div className="lt-form-topbar-title">인트로</div>
+        <div style={{ width: 32 }} />
+      </div>
+      <div className="lt-form-scroll">
+        <div className="lt-form-section">
+          <label className="lt-field">
+            <span>시작 장면 &amp; 첫 대사</span>
+            <textarea value={intro} onChange={(e) => onChange(e.target.value)}
+              placeholder={"채팅을 시작할 때 보여줄 상황 설명이나 캐릭터의 첫 대사를 적어주세요.\n예) *조용한 카페 안, 창가 자리에 앉아 책을 읽던 그가 고개를 든다* 어, 왔어? 여기 앉아."}
+              rows={10} />
+          </label>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ShopFormScreen({ items, onChange, onBack, showToast }) {
+  const addItem = () => onChange([...items, { id: genId(), name: "", image: "", cost: 10 }]);
+  const updateItem = (id, patch) => onChange(items.map((it) => (it.id === id ? { ...it, ...patch } : it)));
+  const removeItem = (id) => onChange(items.filter((it) => it.id !== id));
+  const pickImage = async (id, file) => {
+    try { const resized = await resizeImageFile(file, 240, 0.7); updateItem(id, { image: resized }); }
+    catch (e) { console.error(e); showToast?.("이미지를 불러오지 못했어요"); }
+  };
+  return (
+    <div className="lt-screen-full">
+      <div className="lt-form-topbar">
+        <button className="lt-iconbtn" onClick={onBack}><ChevronLeft size={20} /></button>
+        <div className="lt-form-topbar-title">상점</div>
+        <div style={{ width: 32 }} />
+      </div>
+      <div className="lt-form-scroll">
+        <div className="lt-form-section">
+          <div className="lt-muted">캐릭터에게 선물할 수 있는 아이템을 만들어보세요. 사진, 이름, 가격(크레딧)을 정할 수 있어요.</div>
+          {items.length === 0 && <div className="lt-empty-block">아직 등록된 아이템이 없어요. 아래 버튼으로 추가해보세요.</div>}
+          {items.map((it) => (
+            <div key={it.id} className="lt-shop-edit-item">
+              <label className="lt-shop-edit-thumb">
+                {it.image ? <img src={it.image} alt="" /> : <ImageIcon size={20} />}
+                <input type="file" accept="image/*" style={{ display: "none" }}
+                  onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) pickImage(it.id, f); }} />
+              </label>
+              <div className="lt-shop-edit-fields">
+                <input value={it.name} onChange={(e) => updateItem(it.id, { name: e.target.value.slice(0, 20) })} placeholder="아이템 이름" />
+                <div className="lt-shop-edit-cost">
+                  <span>💰</span>
+                  <input type="number" min="0" value={it.cost} onChange={(e) => updateItem(it.id, { cost: Math.max(0, parseInt(e.target.value) || 0) })} />
+                </div>
+              </div>
+              <button className="lt-iconbtn ghost" onClick={() => removeItem(it.id)}><Trash2 size={13} /></button>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="lt-form-bottom-actions">
+        <button className="lt-btn primary" onClick={addItem}><Plus size={16} /> 상점 아이템 추가</button>
+      </div>
+    </div>
+  );
+}
+
+function JobsFormScreen({ jobs, characters, onChange, onBack }) {
+  const addJob = () => onChange([...jobs, { id: genId(), name: "", reward: 10, companionIds: [], date: "", time: "" }]);
+  const updateJob = (id, patch) => onChange(jobs.map((j) => (j.id === id ? { ...j, ...patch } : j)));
+  const removeJob = (id) => onChange(jobs.filter((j) => j.id !== id));
+  const toggleCompanion = (jobId, charId) => {
+    onChange(jobs.map((j) => {
+      if (j.id !== jobId) return j;
+      const has = (j.companionIds || []).includes(charId);
+      const next = has ? (j.companionIds || []).filter((x) => x !== charId) : [...(j.companionIds || []), charId];
+      return { ...j, companionIds: next };
+    }));
+  };
+  return (
+    <div className="lt-screen-full">
+      <div className="lt-form-topbar">
+        <button className="lt-iconbtn" onClick={onBack}><ChevronLeft size={20} /></button>
+        <div className="lt-form-topbar-title">알바・의뢰</div>
+        <div style={{ width: 32 }} />
+      </div>
+      <div className="lt-form-scroll">
+        <div className="lt-form-section">
+          <div className="lt-muted">완료하면 크레딧을 받는 알바・의뢰를 만들어보세요. 날짜・시간을 정하면 시작할 때 그 시점으로 이동해요. 함께 갈 캐릭터를 고르면 완료할 때 자연스럽게 반응해줘요. 하루 최대 {MAX_JOBS_PER_DAY}개까지만 할 수 있어요.</div>
+          {jobs.length === 0 && <div className="lt-empty-block">아직 등록된 일감이 없어요. 아래 버튼으로 추가해보세요.</div>}
+          {jobs.map((j) => (
+            <div key={j.id} className="lt-job-edit-item-wrap">
+              <div className="lt-job-edit-item">
+                <input value={j.name} onChange={(e) => updateJob(j.id, { name: e.target.value.slice(0, 24) })} placeholder="예: 편의점 알바" />
+                <div className="lt-shop-edit-cost">
+                  <span>💰</span>
+                  <input type="number" min="0" value={j.reward} onChange={(e) => updateJob(j.id, { reward: Math.max(0, parseInt(e.target.value) || 0) })} />
+                </div>
+                <button className="lt-iconbtn ghost" onClick={() => removeJob(j.id)}><Trash2 size={13} /></button>
+              </div>
+              <div className="lt-job-datetime-row">
+                <input type="date" value={j.date || ""} onChange={(e) => updateJob(j.id, { date: e.target.value })} />
+                <input type="time" value={j.time || ""} onChange={(e) => updateJob(j.id, { time: e.target.value })} />
+              </div>
+              {characters.length > 0 && (
+                <div className="lt-job-companion-row">
+                  <span className="lt-job-companion-label">같이 갈 캐릭터</span>
+                  <div className="lt-job-companion-chips">
+                    {characters.map((c) => (
+                      <button key={c.id} className={"lt-companion-chip" + ((j.companionIds || []).includes(c.id) ? " on" : "")}
+                        onClick={() => toggleCompanion(j.id, c.id)}>
+                        {c.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="lt-form-bottom-actions">
+        <button className="lt-btn primary" onClick={addJob}><Plus size={16} /> 일감 추가</button>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- character editor (사진 위치/확대 조정 포함) ---------------- */
+function ImageAdjustSheet({ image, onChange, onClose }) {
+  const dragRef = useRef(null);
+  const dragging = useRef(false);
+  const start = useRef({ x: 0, y: 0, origX: 50, origY: 50 });
+
+  const posFromEvent = (e) => (e.touches ? e.touches[0] : e);
+  const onDown = (e) => {
+    dragging.current = true;
+    const p = posFromEvent(e);
+    start.current = { x: p.clientX, y: p.clientY, origX: image.x, origY: image.y };
+  };
+  const onMove = (e) => {
+    if (!dragging.current || !dragRef.current) return;
+    const p = posFromEvent(e);
+    const rect = dragRef.current.getBoundingClientRect();
+    const dx = ((p.clientX - start.current.x) / rect.width) * 100;
+    const dy = ((p.clientY - start.current.y) / rect.height) * 100;
+    const nx = Math.min(100, Math.max(0, start.current.origX - dx));
+    const ny = Math.min(100, Math.max(0, start.current.origY - dy));
+    onChange({ x: nx, y: ny });
+  };
+  const onUp = () => { dragging.current = false; };
+
+  return (
+    <div className="lt-menu-overlay" onClick={onClose}>
+      <div className="lt-detail-sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="lt-detail-head">
+          <div className="lt-detail-name">사진 위치 조정</div>
+          <button className="lt-iconbtn" onClick={onClose}><X size={18} /></button>
+        </div>
+        <div className="lt-adjust-body">
+          <div className="lt-adjust-preview" ref={dragRef}
+            onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp}
+            onTouchStart={onDown} onTouchMove={onMove} onTouchEnd={onUp}>
+            <img src={image.src} alt="" draggable={false}
+              style={{ objectPosition: `${image.x}% ${image.y}%`, transform: `scale(${image.scale})` }} />
+          </div>
+          <div className="lt-muted" style={{ textAlign: "center" }}>동그란 원 안에서 사진을 드래그해 위치를 맞춰보세요</div>
+          <label className="lt-field" style={{ width: "100%" }}>
+            <span>확대/축소</span>
+            <input type="range" min="1" max="2.5" step="0.05" value={image.scale}
+              onChange={(e) => onChange({ scale: parseFloat(e.target.value) })} />
+          </label>
+          <button className="lt-btn primary" style={{ justifyContent: "center", width: "100%" }} onClick={onClose}><Check size={15} /> 완료</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CharacterEditor({ initial, onCancel, onSave, onDelete, showToast }) {
+  const [name, setName] = useState(initial?.name || "");
+  const [description, setDescription] = useState(initial?.description || "");
+  const [images, setImages] = useState((initial?.images || []).map((img) => (typeof img === "string" ? makeImgObj(img) : img)));
+  const [uploading, setUploading] = useState(false);
+  const [adjustingId, setAdjustingId] = useState(null);
+  const fileRef = useRef(null);
+  const charId = useRef(initial?.id || genId());
+
+  const onPickFiles = async (e) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = "";
+    if (files.length === 0) return;
+    const room = MAX_IMAGES - images.length;
+    if (room <= 0) { showToast?.(`이미지는 최대 ${MAX_IMAGES}장까지 추가할 수 있어요`); return; }
+    setUploading(true);
+    try {
+      const resized = await Promise.all(files.slice(0, room).map((f) => resizeImageFile(f)));
+      setImages((prev) => [...prev, ...resized.map(makeImgObj)]);
+    } catch (err) { console.error(err); showToast?.("이미지를 불러오지 못했어요"); }
+    finally { setUploading(false); }
+  };
+  const updateImage = (id, patch) => setImages((prev) => prev.map((im) => (im.id === id ? { ...im, ...patch } : im)));
+  const removeImage = (id) => setImages((prev) => prev.filter((im) => im.id !== id));
+  const submit = () => {
+    if (!name.trim()) { showToast?.("캐릭터 이름을 입력해주세요"); return; }
+    onSave({ id: charId.current, name: name.trim(), description: description.trim(), images });
+  };
+  const adjusting = images.find((im) => im.id === adjustingId);
+
+  return (
+    <div className="lt-char-editor">
+      <div className="lt-char-editor-images">
+        {images.map((im) => (
+          <div key={im.id} className="lt-char-editor-thumb">
+            <img src={im.src} alt="" style={{ objectPosition: `${im.x}% ${im.y}%`, transform: `scale(${im.scale})` }} />
+            <button className="lt-thumb-adjust" onClick={() => setAdjustingId(im.id)} title="사진 위치/크기 조정"><Crop size={11} /></button>
+            <button className="lt-thumb-remove" onClick={() => removeImage(im.id)}><X size={11} /></button>
+          </div>
+        ))}
+        {images.length < MAX_IMAGES && (
+          <button className="lt-char-editor-add" onClick={() => fileRef.current?.click()} disabled={uploading}>
+            {uploading ? <Loader2 size={18} className="lt-spin" /> : <Camera size={18} />}
+            <span>{images.length}/{MAX_IMAGES}</span>
+            <span className="lt-tiny">캐릭터 이미지</span>
+          </button>
+        )}
+        <input ref={fileRef} type="file" accept="image/*" multiple style={{ display: "none" }} onChange={onPickFiles} />
+      </div>
+      <label className="lt-field">
+        <span>이름 <em>({name.length}/10)</em></span>
+        <input value={name} onChange={(e) => setName(e.target.value.slice(0, 10))} placeholder="짧은 이름이 부르기 편해요. 예) 수현" />
+      </label>
+      <label className="lt-field">
+        <span>설명</span>
+        <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={4}
+          placeholder="캐릭터의 성격, 말투, 행동, 감정 표현에 대해 써주시면 개성 있는 캐릭터를 만들 수 있어요." />
+      </label>
+      <div className="lt-form-actions">
+        <button className="lt-btn primary" onClick={submit}><Check size={15} /> {initial ? "수정 완료" : "추가하기"}</button>
+        <button className="lt-btn" onClick={onCancel}>취소</button>
+        {onDelete && <button className="lt-btn danger" onClick={onDelete}><Trash2 size={15} /></button>}
+      </div>
+      {adjusting && <ImageAdjustSheet image={adjusting} onChange={(patch) => updateImage(adjustingId, patch)} onClose={() => setAdjustingId(null)} />}
+    </div>
+  );
+}
+
+/* ============================================================
+   PROFILE FORM
+============================================================ */
+/* ============================================================
+   백업 / 복원 (사이트를 나가도, 새 버전으로 넘어가도 코드로 되살릴 수 있게)
+============================================================ */
+function BackupScreen({ onBack, onImported, showToast }) {
+  const [busy, setBusy] = useState(false);
+  const [code, setCode] = useState("");
+  const codeRef = useRef(null);
+  const fileRef = useRef(null);
+
+  const downloadBackup = async () => {
+    setBusy(true);
+    try {
+      const c = await exportAllData();
+      const blob = new Blob([c], { type: "text/plain" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `lamptalk-backup-${Date.now()}.txt`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      showToast?.("백업 파일을 다운로드했어요");
+    } catch (e) {
+      console.error(e);
+      showToast?.("다운로드에 실패했어요. 아래 '코드로 보기'를 이용해주세요.");
+    }
+    setBusy(false);
+  };
+  const showAsCode = async () => {
+    setBusy(true);
+    try {
+      const c = await exportAllData();
+      setCode(c);
+      setTimeout(() => { codeRef.current?.focus(); codeRef.current?.select(); }, 50);
+    } catch (e) { console.error(e); showToast?.("백업 코드를 만들지 못했어요"); }
+    setBusy(false);
+  };
+  const onPickBackupFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setBusy(true);
+    try {
+      const text = await file.text();
+      await importAllData(text);
+      onImported?.();
+    } catch (err) {
+      console.error(err);
+      showToast?.("파일을 불러오지 못했어요. 백업 파일이 맞는지 확인해주세요.");
+    }
+    setBusy(false);
+  };
+  const [importText, setImportText] = useState("");
+  const doImportText = async () => {
+    if (!importText.trim()) return;
+    setBusy(true);
+    try { await importAllData(importText); onImported?.(); }
+    catch (e) {
+      console.error(e);
+      showToast?.("코드를 불러오지 못했어요. 코드 전체가 빠짐없이 붙여넣어졌는지 확인해주세요.");
+    }
+    setBusy(false);
+  };
+
+  return (
+    <div className="lt-screen-full">
+      <div className="lt-form-topbar">
+        <button className="lt-iconbtn" onClick={onBack}><ChevronLeft size={20} /></button>
+        <div className="lt-form-topbar-title">데이터 백업 / 복원</div>
+        <div style={{ width: 32 }} />
+      </div>
+      <div className="lt-form-scroll">
+        <div className="lt-form-section">
+          <div className="lt-section-title">백업하기 (추천: 파일로 저장)</div>
+          <div className="lt-muted">모든 프로필・플롯・대화 내용을 파일 하나로 저장해요. 사이트를 나가기 전에 미리 받아두세요. 모바일에서는 파일로 저장하는 쪽이 코드 복사보다 훨씬 안전해요.</div>
+          <button className="lt-btn primary" onClick={downloadBackup} disabled={busy}>
+            {busy ? <Loader2 size={16} className="lt-spin" /> : <Download size={16} />} 백업 파일 다운로드
+          </button>
+          <button className="lt-btn" onClick={showAsCode} disabled={busy}>파일 다운로드가 안 되면 코드로 보기</button>
+          {code && (
+            <label className="lt-field">
+              <span>백업 코드 (탭하면 전체 선택돼요 — 길게 눌러 복사하세요)</span>
+              <textarea ref={codeRef} readOnly value={code} rows={6} onFocus={(e) => e.target.select()} />
+            </label>
+          )}
+        </div>
+        <div className="lt-form-section">
+          <div className="lt-section-title">복원하기 (추천: 백업 파일 선택)</div>
+          <div className="lt-muted">저장해둔 백업 파일을 선택하면 그 시점 데이터로 복원돼요. 지금 가지고 있는 데이터는 덮어써지니 주의하세요.</div>
+          <button className="lt-btn primary" onClick={() => fileRef.current?.click()} disabled={busy}>
+            {busy ? <Loader2 size={16} className="lt-spin" /> : <Upload size={16} />} 백업 파일 선택해서 불러오기
+          </button>
+          <input ref={fileRef} type="file" accept=".txt,text/plain" style={{ display: "none" }} onChange={onPickBackupFile} />
+          <label className="lt-field">
+            <span>또는 백업 코드를 직접 붙여넣기</span>
+            <textarea value={importText} onChange={(e) => setImportText(e.target.value)} rows={6} placeholder="여기에 백업 코드를 붙여넣으세요" />
+          </label>
+          <button className="lt-btn" disabled={busy || !importText.trim()} onClick={doImportText}>코드로 불러오기</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+function ProfileForm({ profileId, profiles, onBack, onSaved }) {
+  const initial = profileId ? profiles.find((p) => p.id === profileId) : null;
+  const [name, setName] = useState(initial?.name || "");
+  const [description, setDescription] = useState(initial?.description || "");
+  const [avatar, setAvatar] = useState(initial?.avatar || "");
+  const fileRef = useRef(null);
+  const [saving, setSaving] = useState(false);
+
+  const onPick = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    try { setAvatar(await resizeImageFile(file, 300, 0.7)); } catch (err) { console.error(err); }
+  };
+  const submit = async () => {
+    if (!name.trim()) return;
+    setSaving(true);
+    await onSaved({ id: initial?.id || genId(), name: name.trim(), description: description.trim(), avatar, createdAt: initial?.createdAt || Date.now() });
+    setSaving(false);
+  };
+
+  return (
+    <div className="lt-screen-full">
+      <div className="lt-form-topbar">
+        <button className="lt-iconbtn" onClick={onBack}><ChevronLeft size={20} /></button>
+        <div className="lt-form-topbar-title">{initial ? "대화 프로필 수정" : "새 대화 프로필"}</div>
+        <div style={{ width: 32 }} />
+      </div>
+      <div className="lt-form-scroll">
+        <div className="lt-form-section" style={{ alignItems: "center", display: "flex", flexDirection: "column", gap: 14 }}>
+          <div className="lt-profile-avatar-wrap" onClick={() => fileRef.current?.click()}>
+            <Avatar name={name || "?"} image={avatar} size={84} />
+            <div className="lt-profile-avatar-edit"><Camera size={13} /></div>
+          </div>
+          <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={onPick} />
+          <label className="lt-field" style={{ width: "100%" }}>
+            <span>이름 <em>캐릭터가 날 이렇게 부를 거예요</em></span>
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="이름을 입력해주세요" />
+          </label>
+          <label className="lt-field" style={{ width: "100%" }}>
+            <span>설명 <em>(선택)</em></span>
+            <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={4} placeholder="나이, 성격, 캐릭터와의 관계 등을 적어두면 대화에 자연스럽게 반영돼요." />
+          </label>
+        </div>
+        <div className="lt-form-bottom-actions">
+          <button className="lt-btn primary" disabled={saving || !name.trim()} onClick={submit}>
+            {saving ? <Loader2 size={16} className="lt-spin" /> : <Check size={16} />} {initial ? "수정 완료" : "추가하기"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   LORE PICKER / LORE FORM
+============================================================ */
+function LorePicker({ selectedIds, onChange, loreBooks, onBack, onCreateNew, onEdit, onDelete }) {
+  const toggle = (id) => {
+    const set = new Set(selectedIds || []);
+    if (set.has(id)) set.delete(id);
+    else { if (set.size >= MAX_LORE) return; set.add(id); }
+    onChange(Array.from(set));
+  };
+  return (
+    <div className="lt-screen-full">
+      <div className="lt-form-topbar">
+        <button className="lt-iconbtn" onClick={onBack}><ChevronLeft size={20} /></button>
+        <div className="lt-form-topbar-title">로어북 연결</div>
+        <div style={{ width: 32 }} />
+      </div>
+      <div className="lt-form-scroll">
+        <div className="lt-form-section">
+          <button className="lt-add-char-tile" onClick={onCreateNew}><Plus size={18} /><span>새 로어북 만들기</span></button>
+          {loreBooks.length === 0 && <div className="lt-empty-block">아직 만든 로어북이 없어요.<br />나만의 세계관을 로어북에 담아보세요.</div>}
+          <div className="lt-lore-pick-list">
+            {loreBooks.map((lb) => (
+              <div key={lb.id} className={"lt-lore-pick-item" + ((selectedIds || []).includes(lb.id) ? " on" : "")} onClick={() => toggle(lb.id)}>
+                <div>
+                  <div className="lt-lore-pick-title">{lb.title}</div>
+                  <div className="lt-lore-pick-sub">{lb.shortDesc || `${lb.entries?.length || 0}개 항목`}</div>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  {(selectedIds || []).includes(lb.id) && <Check size={16} />}
+                  <button className="lt-iconbtn ghost" onClick={(e) => { e.stopPropagation(); onEdit(lb.id); }}><Edit2 size={13} /></button>
+                  <button className="lt-iconbtn ghost" onClick={(e) => { e.stopPropagation(); onDelete(lb.id, lb.title); }}><Trash2 size={13} /></button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LoreForm({ loreId, loreBooks, onBack, onSaved }) {
+  const initial = loreId ? loreBooks.find((l) => l.id === loreId) : null;
+  const [title, setTitle] = useState(initial?.title || "");
+  const [shortDesc, setShortDesc] = useState(initial?.shortDesc || "");
+  const [entries, setEntries] = useState(
+    initial?.entries?.length
+      ? initial.entries.map((e) => ({ ...e, keywords: (e.keywords || []).join(", ") }))
+      : [{ id: genId(), title: "", keywords: "", content: "" }]
+  );
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const updateEntry = (idx, patch) => setEntries((prev) => prev.map((e, i) => (i === idx ? { ...e, ...patch } : e)));
+  const addEntry = () => setEntries((prev) => (prev.length >= 20 ? prev : [...prev, { id: genId(), title: "", keywords: "", content: "" }]));
+  const removeEntry = (idx) => setEntries((prev) => prev.filter((_, i) => i !== idx));
+
+  const save = async () => {
+    if (!title.trim()) { setError("로어북 제목을 입력해주세요."); return; }
+    const clean = entries
+      .map((e) => ({ id: e.id, title: e.title.trim(), keywords: e.keywords.split(",").map((k) => k.trim()).filter(Boolean), content: e.content.trim() }))
+      .filter((e) => e.keywords.length > 0 && e.content);
+    if (clean.length === 0) { setError("키워드와 내용을 모두 입력한 항목이 1개 이상 필요해요."); return; }
+    setError("");
+    setSaving(true);
+    await onSaved({ id: initial?.id || genId(), title: title.trim(), shortDesc: shortDesc.trim(), entries: clean, createdAt: initial?.createdAt || Date.now() });
+    setSaving(false);
+  };
+
+  return (
+    <div className="lt-screen-full">
+      <div className="lt-form-topbar">
+        <button className="lt-iconbtn" onClick={onBack}><ChevronLeft size={20} /></button>
+        <div className="lt-form-topbar-title">로어북</div>
+        <button className="lt-btn primary small" disabled={saving} onClick={save}>{saving ? <Loader2 size={14} className="lt-spin" /> : "등록"}</button>
+      </div>
+      <div className="lt-form-scroll">
+        <div className="lt-form-section">
+          <div className="lt-section-title">소개글</div>
+          <div className="lt-muted">소개글은 AI에게 전달되지 않아요. 로어북을 관리하는 용도로만 사용돼요.</div>
+          <label className="lt-field">
+            <span>로어북 제목 <em>({title.length}/20)</em></span>
+            <input value={title} onChange={(e) => setTitle(e.target.value.slice(0, 20))} placeholder="로어북 제목을 입력해주세요" />
+          </label>
+          <label className="lt-field">
+            <span>짧은 소개 <em>({shortDesc.length}/50)</em></span>
+            <textarea value={shortDesc} onChange={(e) => setShortDesc(e.target.value.slice(0, 50))} placeholder="제목과 함께 보일 짧은 소개를 입력해주세요" rows={2} />
+          </label>
+        </div>
+        <div className="lt-form-section">
+          <div className="lt-section-title">항목</div>
+          <div className="lt-muted">키워드가 대화에서 언급되면 아래 내용이 AI에게 자동으로 전달돼요.</div>
+          {entries.map((e, idx) => (
+            <div key={e.id} className="lt-lore-entry">
+              <div className="lt-lore-entry-head">
+                <span>항목 {idx + 1}</span>
+                {entries.length > 1 && <button onClick={() => removeEntry(idx)}><Trash2 size={13} /></button>}
+              </div>
+              <label className="lt-field">
+                <span>제목 <em>(선택)</em></span>
+                <input value={e.title} onChange={(ev) => updateEntry(idx, { title: ev.target.value.slice(0, 20) })} placeholder="제목을 입력하세요" />
+              </label>
+              <label className="lt-field">
+                <span>키워드</span>
+                <textarea value={e.keywords} onChange={(ev) => updateEntry(idx, { keywords: ev.target.value })} placeholder="키워드를 쉼표(,)로 구분해서 입력해주세요" rows={2} />
+              </label>
+              <label className="lt-field">
+                <span>내용</span>
+                <textarea value={e.content} onChange={(ev) => updateEntry(idx, { content: ev.target.value })} placeholder="키워드가 언급됐을 때 AI에게 전달할 설정을 적어주세요" rows={4} />
+              </label>
+            </div>
+          ))}
+          <button className="lt-add-char-tile" onClick={addEntry}><Plus size={18} /><span>항목 추가</span></button>
+        </div>
+        {error && <div className="lt-error" style={{ margin: "0 16px 16px" }}>{error}</div>}
+        <div className="lt-form-bottom-actions">
+          <button className="lt-btn primary" disabled={saving} onClick={save}>{saving ? <Loader2 size={16} className="lt-spin" /> : <Check size={16} />} 등록</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   상태창 블록 (접기/펼치기)
+============================================================ */
+function StatusBlockView({ status }) {
+  const [collapsed, setCollapsed] = useState(false);
+  return (
+    <div className="lt-status-block">
+      <button className="lt-status-toggle" onClick={() => setCollapsed((c) => !c)}>
+        <ListChecks size={13} /><span>상태창</span>
+        <ChevronDown size={14} style={{ transform: collapsed ? "rotate(-90deg)" : "rotate(0deg)", transition: "transform .15s" }} />
+      </button>
+      {!collapsed && (
+        <>
+          {status.scene && (
+            <div className="lt-status-scene">
+              {SCENE_FIELDS.map(([k, emoji, label]) => status.scene[k] ? (
+                <div key={k} className="lt-status-row"><span>{emoji}</span><b>{label}</b><span className="lt-status-val">{status.scene[k]}</span></div>
+              ) : null)}
+            </div>
+          )}
+          {(status.characters || []).map((sc, i) => (
+            <div key={sc.characterId || i} className="lt-status-char">
+              <div className="lt-status-char-name">{sc.name}</div>
+              {STYLE_FIELDS.map((f) => sc[f.key] ? (
+                <div key={f.key} className="lt-status-row"><span>{f.emoji}</span><b>{f.label}</b><span className="lt-status-val">{sc[f.key]}</span></div>
+              ) : null)}
+            </div>
+          ))}
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ============================================================
+   캐릭터 상세 시트 (설명 / 약속 / 기억 + 검색)
+============================================================ */
+function CharacterDetailSheet({ character, memory, characters, jobs, onClose }) {
+  const [query, setQuery] = useState("");
+  if (!character) return null;
+  const q = query.trim();
+  const matches = (text) => !q || (text || "").includes(q);
+  const sharedBullets = bulletLines(memory?.shared).filter(matches);
+  const ownBullets = bulletLines(memory?.byChar?.[character.id]).filter(matches);
+
+  const promiseLabel = (p) => {
+    const others = (p.characterIds || []).filter((id) => id !== character.id).map((id) => characters.find((c) => c.id === id)?.name).filter(Boolean);
+    const withParts = [...(p.withUser ? ["나"] : []), ...others];
+    return withParts.length ? `${withParts.join(", ")}와(과)` : "";
+  };
+  const memoryPromiseItems = (memory?.promises || [])
+    .filter((p) => (p.characterIds || []).includes(character.id))
+    .map((p) => ({ id: p.id, label: `${promiseLabel(p)} ${p.description}`.trim(), when: p.when || "언제일지 모름" }));
+
+  const jobPromiseItems = (jobs || [])
+    .filter((j) => (j.companionIds || []).includes(character.id))
+    .map((j) => {
+      const names = ["나", ...(j.companionIds || []).filter((id) => id !== character.id).map((id) => characters.find((c) => c.id === id)?.name).filter(Boolean)];
+      return {
+        id: `job-${j.id}`,
+        label: `${j.name || "일감"}(${names.join(", ")})`,
+        when: j.date ? `${formatDateLabel(j.date)}${j.time ? " " + j.time : ""}` : (j.time || "예정"),
+      };
+    });
+
+  const allPromises = [...jobPromiseItems, ...memoryPromiseItems];
+  const filteredPromises = allPromises.filter((p) => matches(p.label) || matches(p.when));
+
+  return (
+    <div className="lt-menu-overlay" onClick={onClose}>
+      <div className="lt-detail-sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="lt-detail-head">
+          <Avatar name={character.name} image={character.images?.[0]} size={56} />
+          <div className="lt-detail-name">{character.name}</div>
+          <button className="lt-iconbtn" onClick={onClose}><X size={18} /></button>
+        </div>
+        <div className="lt-detail-body">
+          <div className="lt-detail-search">
+            <Search size={14} />
+            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="기억・약속 검색" />
+            {query && <button onClick={() => setQuery("")}><X size={13} /></button>}
+          </div>
+
+          {!q && (
+            <>
+              <div className="lt-section-title" style={{ margin: "4px 0" }}>캐릭터 설명</div>
+              <div className="lt-detail-desc">{character.description || "설명이 없어요."}</div>
+            </>
+          )}
+
+          <div className="lt-section-title" style={{ margin: "16px 0 8px" }}>약속</div>
+          {filteredPromises.length === 0 && <div className="lt-muted">{q ? "검색 결과가 없어요." : "아직 잡힌 약속이 없어요."}</div>}
+          {filteredPromises.length > 0 && (
+            <ul className="lt-memory-list">
+              {filteredPromises.map((p) => <li key={p.id}><b>{p.when}</b> · {p.label}</li>)}
+            </ul>
+          )}
+
+          <div className="lt-section-title" style={{ margin: "16px 0 8px" }}>기억</div>
+          {ownBullets.length === 0 && sharedBullets.length === 0 && (
+            <div className="lt-muted">{q ? "검색 결과가 없어요." : "아직 기억하는 내용이 없어요. 대화를 더 나눠보세요."}</div>
+          )}
+          {ownBullets.length > 0 && (
+            <>
+              <div className="lt-detail-memory-label">{character.name}만 기억하는 것</div>
+              <ul className="lt-memory-list">{ownBullets.map((b, i) => <li key={i}>{b}</li>)}</ul>
+            </>
+          )}
+          {sharedBullets.length > 0 && (
+            <>
+              <div className="lt-detail-memory-label">함께 기억하는 것</div>
+              <ul className="lt-memory-list">{sharedBullets.map((b, i) => <li key={i}>{b}</li>)}</ul>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   호감도 / 알바 / 상점 / 인벤토리 / 책갈피 시트
+============================================================ */
+function AffectionSheet({ characters, affection, onClose }) {
+  return (
+    <div className="lt-menu-overlay" onClick={onClose}>
+      <div className="lt-detail-sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="lt-detail-head"><div className="lt-detail-name">호감도</div><button className="lt-iconbtn" onClick={onClose}><X size={18} /></button></div>
+        <div className="lt-detail-body">
+          {characters.length === 0 && <div className="lt-muted">캐릭터가 없어요.</div>}
+          {characters.map((c) => {
+            const v = affection[c.id] ?? AFFECTION_DEFAULT;
+            const band = affectionBand(v);
+            return (
+              <div key={c.id} className="lt-affection-row">
+                <Avatar name={c.name} image={c.images?.[0]} size={38} />
+                <div className="lt-affection-info">
+                  <div className="lt-affection-name">{c.name}</div>
+                  <div className="lt-affection-bar"><div className="lt-affection-bar-fill" style={{ width: `${v}%`, background: band.color }} /></div>
+                </div>
+                <div className="lt-affection-value" style={{ color: band.color }}>{band.label} · {v}</div>
+              </div>
+            );
+          })}
+          <div className="lt-muted" style={{ marginTop: 10 }}>0(최악) ~ 100(최고) 사이의 호감도예요. 선물을 주면 조금씩 올라가고, 캐릭터의 말투와 태도에도 반영돼요.</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+function JobsSheet({ jobs, characters, jobsDoneToday, onDoJob, onClose }) {
+  const limitReached = jobsDoneToday >= MAX_JOBS_PER_DAY;
+  return (
+    <div className="lt-menu-overlay" onClick={onClose}>
+      <div className="lt-detail-sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="lt-detail-head"><div className="lt-detail-name">알바・의뢰</div><button className="lt-iconbtn" onClick={onClose}><X size={18} /></button></div>
+        <div className="lt-detail-body">
+          <div className="lt-muted" style={{ marginBottom: 10 }}>오늘 {jobsDoneToday}/{MAX_JOBS_PER_DAY}회 완료{limitReached ? " · 오늘은 더 할 수 없어요" : ""}</div>
+          {(!jobs || jobs.length === 0) && <div className="lt-muted">아직 등록된 일감이 없어요. 플롯 설정에서 추가해보세요.</div>}
+          {(jobs || []).map((j) => {
+            const companions = (j.companionIds || []).map((id) => characters.find((c) => c.id === id)).filter(Boolean);
+            return (
+              <div key={j.id} className="lt-job-row">
+                <div>
+                  <div className="lt-job-name">{j.name || "이름 없는 일감"}</div>
+                  {(j.date || j.time) && <div className="lt-job-companions-preview">{j.date ? formatDateLabel(j.date) : ""} {j.time || ""}</div>}
+                  {companions.length > 0 && <div className="lt-job-companions-preview">{companions.map((c) => c.name).join(", ")}와 함께</div>}
+                </div>
+                <button className="lt-btn primary small" disabled={limitReached} onClick={() => onDoJob(j)}>알바 시작 (+{j.reward})</button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+function ShopSheet({ items, credits, onBuy, onClose }) {
+  return (
+    <div className="lt-menu-overlay" onClick={onClose}>
+      <div className="lt-detail-sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="lt-detail-head">
+          <div className="lt-detail-name">상점</div>
+          <span className="lt-credit-pill">💰 {credits}</span>
+          <button className="lt-iconbtn" onClick={onClose}><X size={18} /></button>
+        </div>
+        <div className="lt-detail-body">
+          {(!items || items.length === 0) && <div className="lt-muted">아직 등록된 상점 아이템이 없어요. 플롯 설정에서 추가해보세요.</div>}
+          <div className="lt-shop-grid">
+            {(items || []).map((it) => (
+              <div key={it.id} className="lt-shop-card">
+                {it.image ? <img src={it.image} alt="" /> : <div className="lt-shop-card-noimg"><ImageIcon size={20} /></div>}
+                <div className="lt-shop-card-name">{it.name || "이름 없음"}</div>
+                <button className="lt-btn primary small" disabled={credits < it.cost} onClick={() => onBuy(it)}>💰 {it.cost}</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+function InventorySheet({ inventory, characters, onUse, onGive, onClose }) {
+  const [selected, setSelected] = useState(null);
+  const [pickingRecipient, setPickingRecipient] = useState(false);
+
+  if (selected && pickingRecipient) {
+    return (
+      <div className="lt-menu-overlay" onClick={onClose}>
+        <div className="lt-detail-sheet" onClick={(e) => e.stopPropagation()}>
+          <div className="lt-detail-head">
+            <button className="lt-iconbtn" onClick={() => setPickingRecipient(false)}><ChevronLeft size={18} /></button>
+            <div className="lt-detail-name">누구에게 줄까요?</div>
+            <button className="lt-iconbtn" onClick={onClose}><X size={18} /></button>
+          </div>
+          <div className="lt-detail-body">
+            {characters.map((c) => (
+              <div key={c.id} className="lt-gift-recipient-row" onClick={() => { onGive(selected, c); setSelected(null); setPickingRecipient(false); }}>
+                <Avatar name={c.name} image={c.images?.[0]} size={38} />
+                <span>{c.name}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+  if (selected) {
+    return (
+      <div className="lt-menu-overlay" onClick={onClose}>
+        <div className="lt-detail-sheet" onClick={(e) => e.stopPropagation()}>
+          <div className="lt-detail-head">
+            <button className="lt-iconbtn" onClick={() => setSelected(null)}><ChevronLeft size={18} /></button>
+            <div className="lt-detail-name">{selected.name}</div>
+            <button className="lt-iconbtn" onClick={onClose}><X size={18} /></button>
+          </div>
+          <div className="lt-detail-body">
+            {selected.image && <img src={selected.image} className="lt-inventory-detail-img" alt="" />}
+            <div className="lt-detail-desc">
+              {selected.fromCharacterName
+                ? `${selected.fromCharacterName}에게 선물받은 거예요.`
+                : selected.cost ? `상점에서 💰${selected.cost}에 구매했어요.` : "가지고 있는 아이템이에요."}
+            </div>
+            <div className="lt-inventory-actions">
+              <button className="lt-btn primary" onClick={() => { onUse(selected); setSelected(null); }}>사용하기</button>
+              <button className="lt-btn" onClick={() => setPickingRecipient(true)}>선물하기</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="lt-menu-overlay" onClick={onClose}>
+      <div className="lt-detail-sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="lt-detail-head"><div className="lt-detail-name">인벤토리(선물)</div><button className="lt-iconbtn" onClick={onClose}><X size={18} /></button></div>
+        <div className="lt-detail-body">
+          {(!inventory || inventory.length === 0) && <div className="lt-muted">가지고 있는 아이템이 없어요. 상점에서 구매하거나, 캐릭터에게 선물을 받아보세요.</div>}
+          <div className="lt-shop-grid">
+            {(inventory || []).map((it) => (
+              <div key={it.id} className="lt-shop-card" onClick={() => setSelected(it)}>
+                {it.image ? <img src={it.image} alt="" /> : <div className="lt-shop-card-noimg"><ImageIcon size={20} /></div>}
+                <div className="lt-shop-card-name">{it.name}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+function BookmarksSheet({ bookmarks, messages, characters, onJump, onRemove, onClose }) {
+  return (
+    <div className="lt-menu-overlay" onClick={onClose}>
+      <div className="lt-detail-sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="lt-detail-head"><div className="lt-detail-name">책갈피</div><button className="lt-iconbtn" onClick={onClose}><X size={18} /></button></div>
+        <div className="lt-detail-body">
+          {(!bookmarks || bookmarks.length === 0) && <div className="lt-muted">아직 꽂아둔 책갈피가 없어요. 대화 속 메시지 옆의 책갈피 아이콘을 눌러보세요.</div>}
+          {(bookmarks || []).map((b) => {
+            const msg = messages.find((m) => m.id === b.messageId);
+            if (!msg) return null;
+            const speaker = msg.kind === "character" ? characters.find((c) => c.id === msg.speakerId) : null;
+            return (
+              <div key={b.id} className="lt-bookmark-row" onClick={() => onJump(msg.id)}>
+                <Bookmark size={14} />
+                <div className="lt-bookmark-text">
+                  <div className="lt-bookmark-speaker">{speaker?.name || (msg.kind === "user" ? "나" : "상황")}</div>
+                  <div className="lt-bookmark-preview">{(msg.content || "").slice(0, 40)}</div>
+                </div>
+                <button onClick={(e) => { e.stopPropagation(); onRemove(b.id); }}><X size={12} /></button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   CHAT ROOM
+============================================================ */
+function Typing({ label }) {
+  return (
+    <div className="lt-turn-row char">
+      <div style={{ width: 26 }} />
+      <div className="lt-typing">{label && <span className="lt-typing-label">{label}</span>}<span /><span /><span /></div>
+    </div>
+  );
+}
+
+function ChatRoom({ plot, profiles, loreBooks, onBack, onExitToList, onPlotUpdated, onDeleteRoom, onOpenProfileForm, showToast }) {
+  const [messages, setMessages] = useState([]);
+  const [memory, setMemory] = useState({ shared: "", byChar: {}, promises: [] });
+  const [statusEnabled, setStatusEnabled] = useState(null);
+  const [scene, setScene] = useState(DEFAULT_SCENE());
+  const [jobLog, setJobLog] = useState([]);
+  const [presentIds, setPresentIds] = useState([]);
+  const [credits, setCredits] = useState(0);
+  const [inventory, setInventory] = useState([]);
+  const [affection, setAffection] = useState({});
+  const [bookmarks, setBookmarks] = useState([]);
+  const [activeProfileId, setActiveProfileId] = useState(plot?.defaultProfileId || profiles[0]?.id);
+  const [input, setInput] = useState("");
+  const [actionMode, setActionMode] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [typingLabel, setTypingLabel] = useState(null);
+  const [loaded, setLoaded] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [profilePickOpen, setProfilePickOpen] = useState(false);
+  const [detailCharId, setDetailCharId] = useState(null);
+  const [roomSheet, setRoomSheet] = useState(null);
+  const [deleteMode, setDeleteMode] = useState(false);
+  const [selectedDeleteId, setSelectedDeleteId] = useState(null);
+  const [regeneratingId, setRegeneratingId] = useState(null);
+  const [highlightId, setHighlightId] = useState(null);
+  const [error, setError] = useState("");
+  const scrollRef = useRef(null);
+  const sinceMemoryRef = useRef(0);
+  const sinceStatusRef = useRef(0);
+  const sendingRef = useRef(false);
+
+  const characters = plot?.characters || [];
+  const profile = profiles.find((p) => p.id === activeProfileId) || profiles[0];
+  const attachedLore = (plot?.loreIds || []).map((id) => loreBooks.find((l) => l.id === id)).filter(Boolean);
+  const cfg = plot?.styleConfig || DEFAULT_STYLE_CONFIG;
+  const statusOn = statusEnabled === null ? (cfg.scene || STYLE_FIELDS.some((f) => cfg[f.key])) : statusEnabled;
+  const jobsDoneToday = jobLog.filter((e) => e.date === scene.date).length;
+
+
+
+  useEffect(() => {
+    if (!plot) return;
+    let cancelled = false;
+    (async () => {
+      setLoaded(false);
+      const data = await storeGet(`chat:${plot.id}`);
+      if (cancelled) return;
+      if (data) {
+        setMessages(data.messages || []);
+        const mem = data.memory;
+        setMemory(
+          mem && typeof mem === "object"
+            ? { shared: mem.shared || "", byChar: mem.byChar || {}, promises: mem.promises || [] }
+            : { shared: typeof mem === "string" ? mem : "", byChar: {}, promises: [] }
+        );
+        setActiveProfileId(data.activeProfileId || plot.defaultProfileId || profiles[0]?.id);
+        setStatusEnabled(data.statusEnabled === undefined ? null : data.statusEnabled);
+        setScene(data.scene || DEFAULT_SCENE());
+        setJobLog(data.jobLog || []);
+        setPresentIds((data.presentIds || []).filter((id) => (plot.characters || []).some((c) => c.id === id)));
+        setCredits(data.credits ?? START_CREDITS);
+        setInventory(data.inventory || []);
+        setAffection(data.affection || {});
+        setBookmarks(data.bookmarks || []);
+        sinceMemoryRef.current = data.messages?.length || 0;
+      } else {
+        const seed = plot.intro ? [{ id: genId(), kind: "narration", content: plot.intro, ts: Date.now() }] : [];
+        const freshMem = { shared: "", byChar: {}, promises: [] };
+        const freshScene = DEFAULT_SCENE();
+        setMessages(seed); setMemory(freshMem); setStatusEnabled(null);
+        setScene(freshScene); setJobLog([]); setPresentIds([]);
+        setCredits(START_CREDITS); setInventory([]); setAffection({}); setBookmarks([]);
+        sinceMemoryRef.current = 0; sinceStatusRef.current = 0;
+        await storeSet(`chat:${plot.id}`, {
+          messages: seed, memory: freshMem, activeProfileId: plot.defaultProfileId,
+          statusEnabled: null, scene: freshScene, jobLog: [], presentIds: [],
+          credits: START_CREDITS, inventory: [], affection: {}, bookmarks: [],
+        });
+      }
+      setLoaded(true);
+    })();
+    return () => { cancelled = true; };
+  }, [plot?.id]);
+
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [messages, sending, typingLabel]);
+
+  const persistFull = async (overrides = {}) => {
+    await storeSet(`chat:${plot.id}`, {
+      messages: overrides.messages ?? messages,
+      memory: overrides.memory ?? memory,
+      activeProfileId: overrides.activeProfileId ?? activeProfileId,
+      statusEnabled: overrides.statusEnabled === undefined ? statusEnabled : overrides.statusEnabled,
+      scene: overrides.scene ?? scene,
+      jobLog: overrides.jobLog ?? jobLog,
+      presentIds: overrides.presentIds ?? presentIds,
+      credits: overrides.credits ?? credits,
+      inventory: overrides.inventory ?? inventory,
+      affection: overrides.affection ?? affection,
+      bookmarks: overrides.bookmarks ?? bookmarks,
+    });
+  };
+  const updatePlotPreview = async (lastMsg) => { await onPlotUpdated({ ...plot, lastMessage: (lastMsg || "").slice(0, 40), lastMessageAt: Date.now() }); };
+
+  const nameOf = (kind, speakerId) => {
+    if (kind === "user") return profile?.name || "사용자";
+    if (kind === "narration" || kind === "status") return "";
+    return characters.find((c) => c.id === speakerId)?.name || "???";
+  };
+  const memoryTextFor = (character) => [memory.shared, memory.byChar?.[character.id]].filter(Boolean).join("\n");
+  const affectionNote = (charId) => {
+    const v = affection[charId] ?? AFFECTION_DEFAULT;
+    const band = affectionBand(v);
+    const name = characters.find((c) => c.id === charId)?.name || "";
+    return `\n현재 사용자에 대한 "${name}"의 호감도는 100점 만점에 ${v}점(${band.label} 수준)입니다. 호감도가 낮을수록 차갑거나 무심하거나 경계하는 태도를, 높을수록 다정하고 친밀한 태도를 자연스럽게 반영해서 말하세요.`;
+  };
+
+  const maybeUpdateMemory = async (msgs) => {
+    sinceMemoryRef.current += 1;
+    if (sinceMemoryRef.current < MEMORY_EVERY) return memory;
+    sinceMemoryRef.current = 0; sinceStatusRef.current = 0;
+    try {
+      const recent = msgs.slice(-MEMORY_EVERY * 6).filter((m) => m.kind === "user" || m.kind === "character");
+      const transcript = recent.map((m) => `${nameOf(m.kind, m.speakerId)}: ${m.content}`).join("\n");
+      const charList = characters.map((c) => `${c.id}:${c.name}`).join(", ");
+      const charSchema = characters.map((c) => `"${c.id}":"${c.name}만 특별히 기억하는 것들을 한국어 불릿 목록 텍스트로"`).join(",");
+      const sys = `당신은 롤플레잉 채팅방 "${plot.title}"의 기억 정리 보조자입니다. 참여 캐릭터(id:이름): ${charList}. 캐릭터들은 절대 잊으면 안 되는 정보를 매우 잘 기억해야 하고, 서로 나눈 약속도 놓치면 안 됩니다. 아래 JSON 스키마와 정확히 같은 키만 가진 JSON 객체 하나만 출력하세요. 코드블록이나 다른 설명은 절대 쓰지 마세요.\n{"shared":"모두가 함께 아는 사실을 한국어 불릿 목록 텍스트로(각 줄 앞에 -)","characters":{${charSchema}},"promises":[{"characterIds":["관련 캐릭터 id들"],"withUser":true또는false,"description":"약속 내용","when":"언제인지(예: 내일, 다음 주말, 한 달 뒤)"}]}`;
+      const raw = await callClaude(sys, [{ role: "user", content:
+        `[기존 공통 기억]\n${memory.shared || "(없음)"}\n\n[기존 캐릭터별 기억]\n${JSON.stringify(memory.byChar || {})}\n\n[기존 약속 목록]\n${JSON.stringify(memory.promises || [])}\n\n[최근 대화]\n${transcript}\n\n` +
+        `위 대화를 바탕으로 기존 기억과 통합해서 최신 기억 JSON을 만들어줘. 이름, 취향, 관계, 중요한 사건, 감정, 약속, 설정 등 구체적 사실 위주로 자세히 담되 중복은 제거해. 공통 기억은 최대 15줄, 캐릭터별 기억은 각각 최대 8줄. 새로운 대화에서 사용자나 캐릭터끼리 만든 약속・계획이 있으면 promises 목록에 추가하고, 기존 약속 중 이미 지켜졌거나 취소된 것은 목록에서 빼줘. 약속이 없으면 promises는 빈 배열로.` },
+      ], 1400);
+      const clean = raw.replace(/```json|```/g, "").trim();
+      const match = clean.match(/\{[\s\S]*\}/);
+      const parsed = JSON.parse(match ? match[0] : clean);
+      const next = {
+        shared: parsed.shared || memory.shared || "",
+        byChar: { ...memory.byChar, ...(parsed.characters || {}) },
+        promises: Array.isArray(parsed.promises)
+          ? parsed.promises.map((p) => ({ id: genId(), characterIds: p.characterIds || [], withUser: !!p.withUser, description: p.description || "", when: p.when || "" }))
+          : (memory.promises || []),
+      };
+      setMemory(next);
+      return next;
+    } catch (e) { console.error(e); return memory; }
+  };
+
+  const buildHistoryFor = (characterId, msgs) => {
+    const trimmed = msgs.slice(-60);
+    const mapped = trimmed.filter((m) => m.kind === "user" || m.kind === "character" || m.kind === "narration").map((m) => {
+      if (m.kind === "narration") return { role: "user", content: `(상황) ${m.content}` };
+      return {
+        role: m.kind === "character" && m.speakerId === characterId ? "assistant" : "user",
+        content: m.kind === "character" && m.speakerId === characterId ? m.content : `[${nameOf(m.kind, m.speakerId)}] ${m.content}`,
+      };
+    });
+    const normalized = normalizeHistory(mapped);
+    if (normalized.length === 0) return [{ role: "user", content: "..." }];
+    // Claude API는 반드시 user 메시지로 끝나야 함. 빈 입력으로 대화를 이어갈 때
+    // 이 캐릭터 본인의 마지막 대사가 그대로 끝에 남는 경우(=이어서 말할 새 계기가 없는 경우)를 방지.
+    if (normalized[normalized.length - 1].role === "assistant") {
+      normalized.push({ role: "user", content: "(자연스럽게 이야기를 계속 이어가줘)" });
+    }
+    return normalized;
+  };
+  const extraGroupNote = (char, presentSet) => {
+    const others = characters
+      .filter((c) => c.id !== char.id && (!presentSet || presentSet.has(c.id)))
+      .map((c) => c.name);
+    if (characters.length <= 1) return "";
+    return `\n지금은 "${plot.title}" 장면입니다. 현재 이 장소에 함께 있는 다른 캐릭터: ${others.join(", ") || "없음 (지금은 사용자와 단둘이 있습니다)"}. 대괄호 [이름] 표시는 발화자 구분용 태그이니 그대로 따라 쓰지 마세요. 함께 있는 캐릭터의 말에는 자연스럽게 반응하되, 지금 이 자리에 없는 캐릭터를 마음대로 등장시키거나 그들이 이 자리에 있는 것처럼 말하지 마세요.`;
+  };
+
+  const send = async () => {
+    if (sendingRef.current || sending || characters.length === 0) return;
+    sendingRef.current = true;
+    const raw = input.trim();
+    setError(""); setInput("");
+    let current = messages;
+    const excludeIds = new Set();
+
+    if (raw) {
+      if (actionMode) {
+        current = [...messages, { id: genId(), kind: "user", content: `*${raw}*`, ts: Date.now() }];
+      } else {
+        const segments = parseScriptedInput(raw, characters);
+        if (segments.some((s) => s.type === "character")) {
+          for (const seg of segments) {
+            if (seg.type === "character") {
+              current = [...current, { id: genId(), kind: "character", speakerId: seg.characterId, content: seg.content, ts: Date.now() }];
+              excludeIds.add(seg.characterId);
+            } else if (seg.content.trim()) {
+              current = [...current, { id: genId(), kind: "user", content: seg.content.trim(), ts: Date.now() }];
+            }
+          }
+        } else {
+          current = [...current, { id: genId(), kind: "user", content: raw, ts: Date.now() }];
+        }
+      }
+      setMessages(current);
+      await persistFull({ messages: current });
+      updatePlotPreview(raw);
+    }
+    setActionMode(false);
+    setSending(true);
+
+    try {
+      const scanText = [...current.slice(-6).map((m) => m.content || ""), raw].join("\n");
+      const loreContext = getLoreContext(attachedLore, scanText);
+      const priorSpoken = new Set(current.filter((m) => m.kind === "character").map((m) => m.speakerId));
+
+      // 현재 장면에 함께 있는 캐릭터 관리
+      const present = new Set(presentIds.filter((id) => characters.some((c) => c.id === id)));
+      excludeIds.forEach((id) => present.add(id)); // @이름으로 직접 대사한 캐릭터는 당연히 이 자리에 있음
+      // 사용자가 이름을 부른 캐릭터는 합류
+      if (raw) {
+        for (const c of characters) {
+          if (!present.has(c.id) && c.name && raw.includes(c.name)) present.add(c.id);
+        }
+      }
+      // 아무도 없으면 1~2명으로 시작
+      if (present.size === 0 && characters.length > 0) {
+        const initial = [...characters].sort(() => Math.random() - 0.5).slice(0, Math.min(2, characters.length));
+        initial.forEach((c) => present.add(c.id));
+      }
+      // 가끔(12%) 한 명만 자연스럽게 합류 - 단체로 튀어나오지 않게
+      if (present.size < characters.length && Math.random() < 0.12) {
+        const absent = characters.filter((c) => !present.has(c.id));
+        const joiner = absent[Math.floor(Math.random() * absent.length)];
+        if (joiner) present.add(joiner.id);
+      }
+      const nextPresentIds = Array.from(present);
+      setPresentIds(nextPresentIds);
+
+      const respondPool = characters.filter((c) => present.has(c.id) && !excludeIds.has(c.id));
+      const shuffled = [...respondPool].sort(() => Math.random() - 0.5);
+      const respondCount = respondPool.length <= MAX_RESPONDERS ? respondPool.length : MAX_RESPONDERS;
+      const responders = shuffled.slice(0, respondCount);
+      const turnReplies = [];
+      let invNow = inventory;
+      let failCount = 0;
+      let lastErrorMsg = "";
+
+      for (const char of responders) {
+        setTypingLabel(char.name);
+        let extra = extraGroupNote(char, present) + affectionNote(char.id);
+        if (!priorSpoken.has(char.id)) {
+          extra += `\n지금이 이 장면에서 "${char.name}"이(가) 처음 등장하는 순간입니다. 자연스럽게 등장하는 동작 묘사로 대사를 시작하세요 (예: *문을 열고 들어오며*).`;
+        }
+        if (loreContext) extra += `\n\n[세계관 로어북 정보 - 아래 내용을 설정에 반영하세요]\n${loreContext}`;
+        const history = buildHistoryFor(char.id, current);
+        let reply = "";
+        try { reply = await callClaudeWithRetry(buildPersonaSystem(char, memoryTextFor(char), profile, extra), history); }
+        catch (e) { console.error(`${char.name} 응답 실패`, e); failCount += 1; lastErrorMsg = e?.message || String(e); continue; }
+        const charMsg = { id: genId(), kind: "character", speakerId: char.id, content: reply || "...", ts: Date.now() };
+        current = [...current, charMsg];
+        turnReplies.push({ character: char, content: reply });
+        priorSpoken.add(char.id);
+        setMessages(current);
+        await persistFull({ messages: current, inventory: invNow, presentIds: nextPresentIds });
+
+        try {
+          const giftName = await detectGiftFromReply(reply);
+          if (giftName) {
+            invNow = [...invNow, { id: genId(), itemId: null, name: giftName, image: "", cost: 0, fromCharacterId: char.id, fromCharacterName: char.name }];
+            setInventory(invNow);
+            await persistFull({ messages: current, inventory: invNow, presentIds: nextPresentIds });
+            showToast?.(`${char.name}에게서 "${giftName}"을(를) 선물받았어요!`);
+          }
+        } catch (e) { console.error(e); }
+      }
+      setTypingLabel(null);
+
+      // 아무도 대답하지 못했다면 조용히 넘어가지 않고 바로 알려줘요 (원인은 대부분 네트워크/일시적인 API 오류예요)
+      if (responders.length > 0 && turnReplies.length === 0) {
+        setError(`캐릭터 응답을 받아오지 못했어요${lastErrorMsg ? ` — ${lastErrorMsg}` : ""}. 잠시 후 다시 시도해주세요.`);
+        showToast?.("응답에 실패했어요. 다시 시도해주세요.");
+      } else if (failCount > 0) {
+        showToast?.(`${failCount}명의 응답을 받아오지 못했어요`);
+      }
+
+      let nextScene = scene;
+      if (turnReplies.length > 0 && statusOn) {
+        sinceStatusRef.current += 1;
+        if (sinceStatusRef.current >= STATUS_EVERY) {
+          sinceStatusRef.current = 0;
+          try {
+            const recentText = current.slice(-10).filter((m) => m.kind === "user" || m.kind === "character" || m.kind === "narration")
+              .map((m) => (m.kind === "narration" ? `(상황) ${m.content}` : `${nameOf(m.kind, m.speakerId)}: ${m.content}`)).join("\n");
+            let sceneBlock = null;
+            if (cfg.scene) {
+              nextScene = await advanceAndDescribeScene(scene, recentText, showToast);
+              setScene(nextScene);
+              sceneBlock = { date: formatDateLabel(nextScene.date), time: nextScene.time, location: nextScene.location, weather: nextScene.weather, situation: nextScene.situation };
+            }
+            const activeFields = STYLE_FIELDS.filter((f) => cfg[f.key]);
+            const charBlocks = [];
+            for (const r of turnReplies) {
+              try {
+                const cb = await generateCharacterStatus(r.character, activeFields, recentText, showToast);
+                if (cb) charBlocks.push(cb);
+              } catch (e) { console.error(e); }
+            }
+            if (sceneBlock || charBlocks.length > 0) {
+              const statusMsg = { id: genId(), kind: "status", scene: sceneBlock, characters: charBlocks, ts: Date.now() };
+              current = [...current, statusMsg];
+              setMessages(current);
+              await persistFull({ messages: current, scene: nextScene, inventory: invNow, presentIds: nextPresentIds });
+            }
+          } catch (e) {
+            console.error("status generation failed", e);
+            // 최소한 날짜/시간만이라도 보여줌
+            if (cfg.scene) {
+              const fb = advanceClock(scene.date || nowDateTime().date, scene.time || nowDateTime().time, 3);
+              nextScene = { ...scene, ...fb };
+              setScene(nextScene);
+              const statusMsg = { id: genId(), kind: "status", scene: { date: formatDateLabel(nextScene.date), time: nextScene.time, location: nextScene.location, weather: nextScene.weather, situation: nextScene.situation }, characters: [], ts: Date.now() };
+              current = [...current, statusMsg];
+              setMessages(current);
+              await persistFull({ messages: current, scene: nextScene, inventory: invNow, presentIds: nextPresentIds });
+            }
+          }
+        }
+      }
+      if (!raw && turnReplies.length > 0) updatePlotPreview(turnReplies[turnReplies.length - 1]?.content || "");
+
+      const newMem = await maybeUpdateMemory(current);
+      if (newMem !== memory) await persistFull({ messages: current, memory: newMem, scene: nextScene, inventory: invNow, presentIds: nextPresentIds });
+    } catch (e) {
+      console.error(e);
+      setError("응답을 받아오지 못했어요. 잠시 후 다시 시도해주세요.");
+    } finally {
+      setSending(false);
+      setTypingLabel(null);
+      sendingRef.current = false;
+    }
+  };
+
+  const regenerateMessage = async (messageId) => {
+    const idx = messages.findIndex((m) => m.id === messageId);
+    if (idx === -1) return;
+    const msg = messages[idx];
+    if (msg.kind !== "character") return;
+    const character = characters.find((c) => c.id === msg.speakerId);
+    if (!character) return;
+    setRegeneratingId(messageId);
+    try {
+      const historyBase = messages.slice(0, idx);
+      const history = buildHistoryFor(character.id, historyBase);
+      const scanText = historyBase.slice(-6).map((m) => m.content || "").join("\n");
+      const loreContext = getLoreContext(attachedLore, scanText);
+      let extra = extraGroupNote(character, new Set([...presentIds, character.id])) + affectionNote(character.id);
+      if (loreContext) extra += `\n\n[세계관 로어북 정보 - 아래 내용을 설정에 반영하세요]\n${loreContext}`;
+      const reply = await callClaudeWithRetry(buildPersonaSystem(character, memoryTextFor(character), profile, extra), history);
+      const next = messages.map((m, i) => (i === idx ? { ...m, content: reply || "..." } : m));
+      setMessages(next);
+      await persistFull({ messages: next });
+    } catch (e) { console.error(e); showToast?.(`다시 생성하지 못했어요 (${e?.message || e})`); }
+    finally { setRegeneratingId(null); }
+  };
+
+  const doRestart = async () => {
+    setMenuOpen(false);
+    const seed = plot.intro ? [{ id: genId(), kind: "narration", content: plot.intro, ts: Date.now() }] : [];
+    const freshMem = { shared: "", byChar: {}, promises: [] };
+    const freshScene = DEFAULT_SCENE();
+    setMessages(seed); setMemory(freshMem); setScene(freshScene); setJobLog([]);
+    setAffection({}); setPresentIds([]);
+    sinceMemoryRef.current = 0; sinceStatusRef.current = 0;
+    await persistFull({ messages: seed, memory: freshMem, scene: freshScene, jobLog: [], affection: {}, presentIds: [] });
+    showToast?.("대화를 새로 시작했어요 (호감도도 초기화됐어요)");
+  };
+  const toggleStatus = async () => {
+    const next = !statusOn;
+    setMenuOpen(false);
+    setStatusEnabled(next);
+    await persistFull({ statusEnabled: next });
+    showToast?.(next ? "상태창을 켰어요" : "상태창을 껐어요");
+  };
+  const stub = (msg) => { setMenuOpen(false); showToast?.(msg || "준비 중인 기능이에요"); };
+
+  const enterDeleteMode = () => { setMenuOpen(false); setDeleteMode(true); setSelectedDeleteId(null); };
+  const cancelDeleteMode = () => { setDeleteMode(false); setSelectedDeleteId(null); };
+  const confirmDeleteFromPoint = async () => {
+    if (!selectedDeleteId) return;
+    const idx = messages.findIndex((m) => m.id === selectedDeleteId);
+    if (idx === -1) return;
+    const next = messages.slice(0, idx);
+    setMessages(next);
+    await persistFull({ messages: next });
+    setDeleteMode(false);
+    setSelectedDeleteId(null);
+    showToast?.("선택한 지점부터 삭제했어요");
+  };
+
+  const toggleBookmark = async (messageId) => {
+    const exists = bookmarks.find((b) => b.messageId === messageId);
+    const next = exists ? bookmarks.filter((b) => b.messageId !== messageId) : [...bookmarks, { id: genId(), messageId, ts: Date.now() }];
+    setBookmarks(next);
+    await persistFull({ bookmarks: next });
+    showToast?.(exists ? "책갈피를 제거했어요" : "책갈피를 꽂았어요");
+  };
+  const jumpToMessage = (messageId) => {
+    setRoomSheet(null);
+    setTimeout(() => {
+      document.getElementById(`msg-${messageId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+      setHighlightId(messageId);
+      setTimeout(() => setHighlightId(null), 1600);
+    }, 60);
+  };
+
+  const doJob = async (job) => {
+    if (jobsDoneToday >= MAX_JOBS_PER_DAY) { showToast?.(`오늘은 이미 알바・의뢰를 ${MAX_JOBS_PER_DAY}번 했어요. 내일 다시 시도해보세요.`); return; }
+
+    const targetDate = job.date || scene.date;
+    const targetTime = job.time || scene.time;
+    const timeChanged = targetDate !== scene.date || targetTime !== scene.time;
+    const nextScene = timeChanged ? { ...scene, date: targetDate, time: targetTime } : scene;
+
+    const nextCredits = credits + (job.reward || 0);
+    const nextJobLog = [...jobLog, { jobId: job.id, date: targetDate }];
+    setCredits(nextCredits);
+    setJobLog(nextJobLog);
+    if (timeChanged) setScene(nextScene);
+    setRoomSheet(null);
+    showToast?.(`+${job.reward} 크레딧을 받았어요`);
+
+    const companions = (job.companionIds || []).map((id) => characters.find((c) => c.id === id)).filter(Boolean);
+    // 알바 장면에는 동행 캐릭터만 함께 있음
+    const jobPresentIds = companions.map((c) => c.id);
+    if (companions.length > 0) setPresentIds(jobPresentIds);
+    const timeNote = timeChanged ? ` (${formatDateLabel(targetDate)} ${targetTime})` : "";
+    const jobMsg = {
+      id: genId(), kind: "narration",
+      content: `*${profile?.name || "나"}${companions.length ? `가 ${companions.map((c) => c.name).join(", ")}와(과) 함께` : "가"} "${job.name}"${timeNote}을(를) 하러 갔다*`,
+      ts: Date.now(),
+    };
+    let current = [...messages, jobMsg];
+    setMessages(current);
+    await persistFull({ messages: current, credits: nextCredits, scene: nextScene, jobLog: nextJobLog, presentIds: companions.length > 0 ? jobPresentIds : presentIds });
+
+    if (companions.length === 0) return;
+    const presentSet = new Set(jobPresentIds);
+    setSending(true);
+    for (const comp of companions.slice(0, MAX_RESPONDERS)) {
+      setTypingLabel(comp.name);
+      try {
+        const history = buildHistoryFor(comp.id, current);
+        const extra = extraGroupNote(comp, presentSet) + affectionNote(comp.id) +
+          `\n[매우 중요] 방금 사용자와 단둘이(또는 위에 명시된 동행끼리만) "${job.name}"을(를) 하고 왔습니다. 당신의 이번 대사는 반드시 이 "${job.name}" 경험에 대한 이야기여야 합니다. 이 자리에 없는 다른 캐릭터를 등장시키지 마세요.`;
+        const reply = await callClaudeWithRetry(buildPersonaSystem(comp, memoryTextFor(comp), profile, extra), history);
+        const cm = { id: genId(), kind: "character", speakerId: comp.id, content: reply || "...", ts: Date.now() };
+        current = [...current, cm];
+        setMessages(current);
+        await persistFull({ messages: current, credits: nextCredits, scene: nextScene, jobLog: nextJobLog, presentIds: jobPresentIds });
+      } catch (e) { console.error(e); }
+    }
+    setSending(false); setTypingLabel(null);
+  };
+
+  const buyItem = async (item) => {
+    if (credits < item.cost) { showToast?.("크레딧이 부족해요"); return; }
+    const nextCredits = credits - item.cost;
+    const nextInventory = [...inventory, { id: genId(), itemId: item.id, name: item.name, image: item.image, cost: item.cost }];
+    setCredits(nextCredits);
+    setInventory(nextInventory);
+    await persistFull({ credits: nextCredits, inventory: nextInventory });
+    showToast?.(`${item.name}을(를) 구매했어요`);
+  };
+  const useItem = async (item) => {
+    const idx = inventory.findIndex((x) => x.id === item.id);
+    const nextInventory = idx === -1 ? inventory : [...inventory.slice(0, idx), ...inventory.slice(idx + 1)];
+    setInventory(nextInventory);
+    setRoomSheet(null);
+    const useMsg = { id: genId(), kind: "narration", content: `*${profile?.name || "나"}가 "${item.name}"을(를) 사용했다*`, ts: Date.now() };
+    let current = [...messages, useMsg];
+    setMessages(current);
+    await persistFull({ messages: current, inventory: nextInventory });
+    if (characters.length === 0) return;
+    const presentNow = characters.filter((c) => presentIds.includes(c.id));
+    const pool = presentNow.length > 0 ? presentNow : characters;
+    const reactor = pool[Math.floor(Math.random() * pool.length)];
+    setSending(true); setTypingLabel(reactor.name);
+    try {
+      const history = buildHistoryFor(reactor.id, current);
+      const extra = extraGroupNote(reactor, new Set([...presentIds, reactor.id])) + affectionNote(reactor.id) + `\n방금 사용자가 "${item.name}"을(를) 사용하는 모습을 봤습니다. 그것에 대한 반응을 자연스럽게 표현하며 말하세요.`;
+      const reply = await callClaudeWithRetry(buildPersonaSystem(reactor, memoryTextFor(reactor), profile, extra), history);
+      const rm = { id: genId(), kind: "character", speakerId: reactor.id, content: reply || "...", ts: Date.now() };
+      current = [...current, rm];
+      setMessages(current);
+      await persistFull({ messages: current, inventory: nextInventory });
+    } catch (e) { console.error(e); }
+    setSending(false); setTypingLabel(null);
+  };
+  const giveGift = async (invItem, character) => {
+    const idx = inventory.findIndex((x) => x.id === invItem.id);
+    const nextInventory = idx === -1 ? inventory : [...inventory.slice(0, idx), ...inventory.slice(idx + 1)];
+    const bump = Math.min(10, Math.max(3, Math.round((invItem.cost || 10) / 15) + 3));
+    const nextAffection = { ...affection, [character.id]: clamp((affection[character.id] ?? AFFECTION_DEFAULT) + bump, AFFECTION_MIN, AFFECTION_MAX) };
+    setInventory(nextInventory);
+    setAffection(nextAffection);
+    setRoomSheet(null);
+
+    const giftMsg = { id: genId(), kind: "narration", content: `*${profile?.name || "나"}가 ${character.name}에게 "${invItem.name}"을(를) 선물했다*`, ts: Date.now() };
+    let current = [...messages, giftMsg];
+    setMessages(current);
+    await persistFull({ messages: current, inventory: nextInventory, affection: nextAffection });
+
+    setSending(true);
+    setTypingLabel(character.name);
+    try {
+      const presentSet = new Set([...presentIds, character.id]);
+      const history = buildHistoryFor(character.id, current);
+      const extra = extraGroupNote(character, presentSet) + affectionNote(character.id) +
+        `\n[매우 중요] 방금 사용자가 당신에게 "${invItem.name}"을(를) 직접 선물로 건넸습니다. 당신의 이번 대사는 반드시 이 "${invItem.name}" 선물을 받은 것에 대한 반응이어야 합니다. 선물을 받아들고, 그에 대한 감정을 표현하세요. 선물과 무관한 다른 이야기를 하지 마세요.`;
+      const reply = await callClaudeWithRetry(buildPersonaSystem(character, memoryTextFor(character), profile, extra), history);
+      const charMsg = { id: genId(), kind: "character", speakerId: character.id, content: reply || "...", ts: Date.now() };
+      current = [...current, charMsg];
+      setMessages(current);
+      await persistFull({ messages: current, inventory: nextInventory, affection: nextAffection });
+    } catch (e) { console.error(e); }
+    setSending(false); setTypingLabel(null);
+    showToast?.(`${character.name}에게 선물을 줬어요 (+${bump} 호감도)`);
+  };
+
+  if (!plot) return null;
+
+  return (
+    <div className="lt-screen-full">
+      <div className="lt-chat-header">
+        <button className="lt-iconbtn" onClick={onBack}><ChevronLeft size={20} /></button>
+        <StackAvatars people={characters} size={32} />
+        <div className="lt-chat-header-text">
+          <div className="lt-chat-header-name">{plot.title}</div>
+          <div className="lt-chat-header-sub">{characters.map((c) => c.name).join(", ")}</div>
+        </div>
+        <div className="lt-profile-pill-wrap">
+          <button className="lt-profile-pill" onClick={() => setProfilePickOpen((v) => !v)}>{profile?.name || "프로필"} <ChevronDown size={13} /></button>
+          {profilePickOpen && (
+            <div className="lt-profile-pick-menu">
+              {profiles.map((p) => (
+                <div key={p.id} className={"lt-profile-pick-item" + (p.id === activeProfileId ? " on" : "")}
+                  onClick={async () => { setActiveProfileId(p.id); setProfilePickOpen(false); await persistFull({ activeProfileId: p.id }); }}>
+                  {p.name}
+                </div>
+              ))}
+              <div className="lt-profile-pick-item add" onClick={() => { setProfilePickOpen(false); onOpenProfileForm(null); }}><Plus size={12} /> 새 프로필</div>
+            </div>
+          )}
+        </div>
+        <button className="lt-iconbtn" onClick={() => setMenuOpen((v) => !v)}><Menu size={19} /></button>
+      </div>
+
+      {menuOpen && (
+        <div className="lt-menu-overlay" onClick={() => setMenuOpen(false)}>
+          <div className="lt-menu-panel" onClick={(e) => e.stopPropagation()}>
+            <div className="lt-menu-credit-pill">💰 {credits} 크레딧</div>
+            <button className="lt-menu-item" onClick={doRestart}>
+              <RotateCcw size={16} /><div><div>새로하기</div><div className="lt-menu-item-sub">현재 내용을 초기화하고 다시 시작해요</div></div>
+            </button>
+            <button className="lt-menu-item danger" onClick={enterDeleteMode}>
+              <Trash2 size={16} /><div><div>대화 삭제</div><div className="lt-menu-item-sub">원하는 지점을 선택해서 그 이후를 삭제해요</div></div>
+            </button>
+            <div className="lt-menu-divider" />
+            <button className="lt-menu-item" onClick={() => { setMenuOpen(false); onOpenProfileForm(activeProfileId); }}>
+              <Users size={16} /><div style={{ flex: 1 }}>대화 프로필</div><span className="lt-menu-item-value">{profile?.name} <ChevronRight size={14} /></span>
+            </button>
+            <button className="lt-menu-item" onClick={toggleStatus}>
+              <ListChecks size={16} /><div style={{ flex: 1 }}>상태창</div><span className="lt-menu-item-value">{statusOn ? "사용" : "사용 안 함"} <ChevronRight size={14} /></span>
+            </button>
+            <button className="lt-menu-item" onClick={() => { setMenuOpen(false); setRoomSheet("affection"); }}>
+              <Heart size={16} /><div style={{ flex: 1 }}>호감도</div><ChevronRight size={14} />
+            </button>
+            <div className="lt-menu-divider" />
+            <button className="lt-menu-item" onClick={() => { setMenuOpen(false); setRoomSheet("jobs"); }}>
+              <Briefcase size={16} /><div style={{ flex: 1 }}>일하기 (알바・의뢰)</div><ChevronRight size={14} />
+            </button>
+            <button className="lt-menu-item" onClick={() => { setMenuOpen(false); setRoomSheet("shop"); }}>
+              <ShoppingBag size={16} /><div style={{ flex: 1 }}>상점</div><ChevronRight size={14} />
+            </button>
+            <button className="lt-menu-item" onClick={() => { setMenuOpen(false); setRoomSheet("inventory"); }}>
+              <Gift size={16} /><div style={{ flex: 1 }}>인벤토리(선물)</div><ChevronRight size={14} />
+            </button>
+            <div className="lt-menu-divider" />
+            <button className="lt-menu-item" onClick={() => { setMenuOpen(false); setRoomSheet("bookmarks"); }}>
+              <Bookmark size={16} /><div style={{ flex: 1 }}>책갈피 목록</div><ChevronRight size={14} />
+            </button>
+            <div className="lt-menu-divider" />
+            <button className="lt-menu-item" onClick={onExitToList}><LogOut size={16} /><div>대화방 나가기</div></button>
+          </div>
+        </div>
+      )}
+
+      <button className="lt-fab-back" onClick={onBack} title="뒤로가기"><ChevronLeft size={20} /></button>
+
+      <div className="lt-chat-scroll" ref={scrollRef}>
+          {!loaded && <div className="lt-muted lt-pad">불러오는 중…</div>}
+          {loaded && messages.length === 0 && <div className="lt-empty-hint lt-pad">{characters.map((c) => c.name).join(", ")}에게 첫 마디를 건네보세요.</div>}
+          {messages.map((m) => {
+            let content;
+            if (m.kind === "narration") {
+              content = <div className="lt-narration"><AlignLeft size={13} /><span>{m.content}</span></div>;
+            } else if (m.kind === "status") {
+              content = <StatusBlockView status={m} />;
+            } else {
+              const isUser = m.kind === "user";
+              const speaker = !isUser ? characters.find((c) => c.id === m.speakerId) : null;
+              const bookmarked = bookmarks.some((b) => b.messageId === m.id);
+              content = (
+                <div className={"lt-turn-row " + (isUser ? "user" : "char")}>
+                  {!isUser && (
+                    <button className="lt-avatar-btn" onClick={(e) => { if (deleteMode) return; e.stopPropagation(); setDetailCharId(speaker?.id); }}>
+                      <Avatar name={speaker?.name} image={speaker?.images?.[0]} size={26} />
+                    </button>
+                  )}
+                  <div className="lt-turn-text">
+                    <div className="lt-turn-name">{isUser ? (profile?.name || "나") : speaker?.name}</div>
+                    <div className="lt-turn-content">{renderMessageContent(m.content)}</div>
+                    {!deleteMode && (
+                      <div className="lt-turn-actions">
+                        {m.kind === "character" && (
+                          <button className="lt-msg-action" onClick={(e) => { e.stopPropagation(); regenerateMessage(m.id); }} disabled={regeneratingId === m.id} title="다시 생성">
+                            {regeneratingId === m.id ? <Loader2 size={12} className="lt-spin" /> : <RotateCcw size={12} />}
+                          </button>
+                        )}
+                        <button className="lt-msg-action" onClick={(e) => { e.stopPropagation(); toggleBookmark(m.id); }} title="책갈피">
+                          <Bookmark size={12} fill={bookmarked ? "currentColor" : "none"} />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            }
+            return (
+              <div key={m.id} id={`msg-${m.id}`}
+                className={
+                  (deleteMode ? "lt-delete-select" + (selectedDeleteId === m.id ? " selected" : "") : "") +
+                  (highlightId === m.id ? " lt-highlight" : "")
+                }
+                onClick={deleteMode ? () => setSelectedDeleteId(m.id) : undefined}>
+                {content}
+              </div>
+            );
+          })}
+          {sending && <Typing label={typingLabel} />}
+        </div>
+
+      {error && <div className="lt-error lt-pad">{error}</div>}
+
+      {deleteMode ? (
+        <div className="lt-input-bar lt-delete-bar">
+          <button className="lt-btn" onClick={cancelDeleteMode}>취소</button>
+          <div className="lt-muted" style={{ flex: 1, textAlign: "center", fontSize: 12 }}>삭제할 지점을 선택하세요</div>
+          <button className="lt-btn danger" disabled={!selectedDeleteId} onClick={confirmDeleteFromPoint}>선택 지점부터 삭제</button>
+        </div>
+      ) : (
+        <div className="lt-input-bar">
+          <button className={"lt-action-toggle" + (actionMode ? " on" : "")} onClick={() => setActionMode((v) => !v)} title="행동 묘사로 보내기">*</button>
+          <input
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
+            placeholder={actionMode ? "행동을 입력해주세요 (예: 문을 조용히 닫는다)" : "내용 입력하기 (@이름: 대사 / 비워두고 보내면 대화가 이어져요)"}
+            disabled={sending}
+          />
+          <button className="lt-send" onClick={send} disabled={sending}>
+            {sending ? <Loader2 size={16} className="lt-spin" /> : <Send size={16} />}
+          </button>
+        </div>
+      )}
+
+      <CharacterDetailSheet character={characters.find((c) => c.id === detailCharId)} memory={memory} characters={characters} jobs={plot.jobs} onClose={() => setDetailCharId(null)} />
+      {roomSheet === "affection" && <AffectionSheet characters={characters} affection={affection} onClose={() => setRoomSheet(null)} />}
+      {roomSheet === "jobs" && <JobsSheet jobs={plot.jobs} characters={characters} jobsDoneToday={jobsDoneToday} onDoJob={doJob} onClose={() => setRoomSheet(null)} />}
+      {roomSheet === "shop" && <ShopSheet items={plot.shopItems} credits={credits} onBuy={buyItem} onClose={() => setRoomSheet(null)} />}
+      {roomSheet === "inventory" && <InventorySheet inventory={inventory} characters={characters} onUse={useItem} onGive={giveGift} onClose={() => setRoomSheet(null)} />}
+      {roomSheet === "bookmarks" && (
+        <BookmarksSheet
+          bookmarks={bookmarks} messages={messages} characters={characters}
+          onJump={jumpToMessage}
+          onRemove={async (id) => { const next = bookmarks.filter((b) => b.id !== id); setBookmarks(next); await persistFull({ bookmarks: next }); }}
+          onClose={() => setRoomSheet(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/* =========================================================
+   styles
+========================================================= */
+const CSS = `
+:root {
+  --bg: #0a0a0e; --surface: #16161c; --surface-2: #1e1e26; --border: #2a2a34;
+  --text: #f2f1f5; --muted: #8d8b9c; --accent: #7c5cff; --accent-soft: rgba(124,92,255,0.16); --danger: #e5607a;
+}
+.lt-app * { box-sizing: border-box; }
+.lt-app {
+  font-family: 'Pretendard','Noto Sans KR',-apple-system,sans-serif;
+  background: var(--bg); color: var(--text);
+  width: 100%; max-width: 430px; margin: 0 auto; height: 100%; min-height: 680px;
+  display: flex; flex-direction: column; border-radius: 20px; overflow: hidden;
+  position: relative; box-shadow: 0 0 0 1px var(--border);
+}
+.lt-spin { animation: lt-spin 1s linear infinite; }
+@keyframes lt-spin { to { transform: rotate(360deg); } }
+
+.lt-topbar { display:flex; align-items:center; gap:8px; padding:14px 16px 10px; flex-shrink:0; }
+.lt-topbar-mark { width:24px; height:24px; border-radius:7px; background:linear-gradient(145deg,var(--accent),#5b3dd6); display:flex; align-items:center; justify-content:center; }
+.lt-topbar-title { font-weight:700; font-size:16px; letter-spacing:-0.01em; flex:1; }
+.lt-topbar-backup { margin-left:auto; background:var(--surface); border:1px solid var(--border); color:var(--text); width:30px; height:30px; border-radius:9px; display:flex; align-items:center; justify-content:center; cursor:pointer; }
+
+.lt-content { flex:1; min-height:0; display:flex; flex-direction:column; overflow:hidden; position:relative; }
+.lt-overlay-layer { position:absolute; inset:0; background:var(--bg); display:flex; flex-direction:column; }
+
+.lt-bottomnav { display:flex; border-top:1px solid var(--border); background:var(--surface); flex-shrink:0; }
+.lt-navbtn { flex:1; display:flex; flex-direction:column; align-items:center; gap:3px; padding:9px 0 10px; background:none; border:none; color:var(--muted); cursor:pointer; font-size:10.5px; }
+.lt-navbtn.active { color: var(--accent); }
+
+.lt-screen { flex:1; overflow-y:auto; padding: 4px 16px 20px; }
+.lt-screen.no-pad-bottom { padding-bottom: 0; }
+.lt-screen-full { flex:1; min-height:0; display:flex; flex-direction:column; overflow:hidden; position:relative; }
+
+.lt-hero { padding: 18px 4px 6px; }
+.lt-hero-glow { width:44px; height:44px; border-radius:13px; background:linear-gradient(145deg,var(--accent),#5b3dd6); display:flex; align-items:center; justify-content:center; margin-bottom:10px; box-shadow: 0 0 30px var(--accent-soft); }
+.lt-hero h1 { font-size:19px; margin:0 0 6px; }
+.lt-hero p { font-size:12.5px; color:var(--muted); line-height:1.6; margin:0 0 14px; }
+.lt-hero-btn { width:100%; justify-content:center; }
+
+.lt-stats-row { display:flex; gap:10px; margin: 6px 4px 18px; }
+.lt-stat-card { flex:1; background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:12px; }
+.lt-stat-num { font-size:20px; font-weight:800; }
+.lt-stat-label { font-size:11px; color:var(--muted); margin-top:2px; }
+
+.lt-section-title { font-size:13px; font-weight:700; margin: 10px 4px 10px; }
+.lt-empty-block { color:var(--muted); font-size:12.5px; line-height:1.7; padding: 16px 4px; text-align:center; background:var(--surface); border:1px dashed var(--border); border-radius:14px; margin: 0 4px; }
+.lt-link { color: var(--accent); background:none; border:none; cursor:pointer; text-decoration:underline; font-size:12.5px; padding:0; margin-top:4px; }
+
+.lt-recent-scroll { display:flex; gap:10px; overflow-x:auto; padding: 2px 4px 6px; }
+.lt-recent-card { flex:0 0 128px; background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:12px 10px; display:flex; flex-direction:column; gap:8px; cursor:pointer; }
+.lt-recent-title { font-size:12.5px; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.lt-recent-sub { font-size:10.5px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+.lt-list-header { display:flex; align-items:center; justify-content:space-between; padding: 8px 16px 6px; font-size:15px; font-weight:700; flex-shrink:0; }
+.lt-room-list { overflow-y:auto; flex:1; padding: 0 8px 16px; }
+.lt-room-item { display:flex; align-items:center; gap:12px; padding:11px 8px; border-radius:14px; cursor:pointer; }
+.lt-room-item:active { background: var(--surface); }
+.lt-room-text { flex:1; min-width:0; }
+.lt-room-title { font-size:14px; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.lt-room-sub { font-size:11.5px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-top:2px; }
+
+.lt-create-cta { display:flex; align-items:center; gap:12px; width:100%; background:linear-gradient(135deg, var(--accent-soft), transparent); border:1px solid var(--border); border-radius:16px; padding:14px; color:var(--text); cursor:pointer; margin: 6px 4px 6px; }
+.lt-create-cta-icon { width:36px; height:36px; border-radius:11px; background:linear-gradient(145deg,var(--accent),#5b3dd6); display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+.lt-create-cta-title { font-size:13.5px; font-weight:700; text-align:left; }
+.lt-create-cta-sub { font-size:11px; color:var(--muted); text-align:left; margin-top:2px; }
+
+.lt-plot-grid { display:flex; flex-direction:column; gap:10px; padding: 0 4px 8px; }
+.lt-plot-card { background:var(--surface); border:1px solid var(--border); border-radius:14px; overflow:hidden; }
+.lt-plot-card-top { display:flex; align-items:center; gap:10px; padding:12px; cursor:pointer; }
+.lt-plot-card-title { font-size:13px; font-weight:700; flex:1; }
+.lt-plot-card-sub { font-size:11px; color:var(--muted); }
+.lt-plot-card-actions { display:flex; gap:6px; padding: 0 12px 12px; }
+.lt-chip-btn { display:flex; align-items:center; gap:4px; font-size:11px; background:var(--surface-2); border:1px solid var(--border); color:var(--text); border-radius:9px; padding:5px 9px; cursor:pointer; }
+.lt-chip-btn.danger { color:var(--danger); }
+
+.lt-iconbtn { background:transparent; border:none; color:var(--text); width:32px; height:32px; border-radius:9px; display:flex; align-items:center; justify-content:center; cursor:pointer; flex-shrink:0; }
+.lt-iconbtn:active { background: var(--surface-2); }
+.lt-iconbtn.ghost { opacity:0.55; }
+
+.lt-btn { display:inline-flex; align-items:center; gap:6px; background:var(--surface-2); color:var(--text); border:1px solid var(--border); padding:10px 16px; border-radius:12px; font-size:13px; font-weight:600; cursor:pointer; }
+.lt-btn.small { padding:7px 14px; font-size:12.5px; }
+.lt-btn.primary { background:linear-gradient(135deg,var(--accent),#6a4ae0); border:none; font-weight:700; }
+.lt-btn.primary:disabled { opacity:0.55; }
+.lt-btn.danger { background:transparent; border:1px solid rgba(229,96,122,0.4); color:var(--danger); }
+
+.lt-form-topbar { display:flex; align-items:center; gap:8px; padding:12px 12px; border-bottom:1px solid var(--border); flex-shrink:0; background:var(--bg); position:sticky; top:0; z-index:5; }
+.lt-form-topbar-title { flex:1; text-align:center; font-weight:700; font-size:15px; }
+
+.lt-form-scroll { flex:1; overflow-y:auto; }
+.lt-form-section { padding: 16px; border-bottom: 1px solid var(--border); display:flex; flex-direction:column; gap:14px; }
+.lt-form-section:last-of-type { border-bottom:none; }
+
+.lt-settings-row { display:flex; align-items:center; gap:12px; width:100%; background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:13px 14px; color:var(--text); cursor:pointer; margin-bottom:8px; }
+.lt-settings-row-label { flex:1; font-size:13px; font-weight:600; text-align:left; }
+.lt-settings-row-value { font-size:11.5px; color:var(--muted); }
+
+.lt-field { display:flex; flex-direction:column; gap:6px; font-size:12px; color:var(--muted); }
+.lt-field em { font-style:normal; opacity:0.7; }
+.lt-field input, .lt-field textarea {
+  background: var(--surface); border:1px solid var(--border); color:var(--text);
+  border-radius:12px; padding:11px 13px; font-size:13.5px; font-family:inherit; resize:vertical; outline:none;
+}
+.lt-field input:focus, .lt-field textarea:focus { border-color: var(--accent); }
+.lt-app input[type=range] { accent-color: var(--accent); width:100%; }
+.lt-app input[type=date], .lt-app input[type=time] { color-scheme: dark; }
+
+.lt-char-cards { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:4px; }
+.lt-char-card { display:flex; flex-direction:column; align-items:center; gap:5px; width:64px; cursor:pointer; }
+.lt-char-card span { font-size:11px; text-align:center; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:100%; }
+.lt-add-char-tile { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px; border:1.5px dashed var(--border); border-radius:14px; padding:18px 10px; background:var(--surface); color:var(--muted); cursor:pointer; width:100%; }
+.lt-add-char-tile span { font-size:12px; }
+
+.lt-char-editor { background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:14px; display:flex; flex-direction:column; gap:14px; }
+.lt-char-editor-images { display:flex; flex-wrap:wrap; gap:8px; }
+.lt-char-editor-thumb { position:relative; width:60px; height:60px; border-radius:12px; overflow:hidden; }
+.lt-char-editor-thumb img { width:100%; height:100%; object-fit:cover; }
+.lt-thumb-adjust, .lt-thumb-remove { position:absolute; top:2px; width:16px; height:16px; border-radius:50%; background:rgba(0,0,0,0.7); border:none; color:#fff; display:flex; align-items:center; justify-content:center; cursor:pointer; }
+.lt-thumb-adjust { left:2px; }
+.lt-thumb-remove { right:2px; }
+.lt-char-editor-add { width:60px; height:60px; border-radius:12px; border:1.5px dashed var(--border); background:var(--surface-2); color:var(--muted); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px; cursor:pointer; }
+.lt-tiny { font-size:8px; }
+
+.lt-profile-chip-row { display:flex; flex-wrap:wrap; gap:8px; }
+.lt-profile-chip { background:var(--surface); border:1px solid var(--border); color:var(--text); border-radius:20px; padding:8px 14px; font-size:12.5px; cursor:pointer; }
+.lt-profile-chip.on { background:var(--accent-soft); border-color:var(--accent); color:#fff; }
+.lt-profile-chip.dashed { border-style:dashed; display:flex; align-items:center; gap:4px; color:var(--muted); }
+
+.lt-form-actions { display:flex; gap:8px; flex-wrap:wrap; }
+.lt-form-bottom-actions { display:flex; flex-direction:column; gap:10px; padding:12px 16px calc(16px + env(safe-area-inset-bottom)); border-top:1px solid var(--border); flex-shrink:0; background:var(--bg); }
+.lt-error { color:var(--danger); font-size:12.5px; background:rgba(229,96,122,0.1); border:1px solid rgba(229,96,122,0.3); padding:9px 12px; border-radius:10px; }
+.lt-muted { color:var(--muted); font-size:12.5px; }
+.lt-pad { padding:16px; }
+
+.lt-profile-avatar-wrap { position:relative; cursor:pointer; }
+.lt-profile-avatar-edit { position:absolute; bottom:0; right:0; width:26px; height:26px; border-radius:50%; background:var(--accent); display:flex; align-items:center; justify-content:center; border:2px solid var(--bg); }
+
+.lt-avatar-fallback { background:linear-gradient(150deg,#4b3a9c,#1e1e26); color:#c9bcff; display:flex; align-items:center; justify-content:center; font-weight:700; border:1px solid var(--border); }
+.lt-avatar-btn { background:none; border:none; padding:0; cursor:pointer; display:flex; flex-shrink:0; }
+
+.lt-switch { width:42px; height:24px; border-radius:14px; background:var(--surface-2); border:1px solid var(--border); position:relative; cursor:pointer; flex-shrink:0; }
+.lt-switch.on { background:var(--accent); border-color:var(--accent); }
+.lt-switch span { position:absolute; top:2px; left:2px; width:18px; height:18px; border-radius:50%; background:#fff; transition:transform .15s; }
+.lt-switch.on span { transform:translateX(18px); }
+.lt-toggle-row { display:flex; align-items:center; justify-content:space-between; font-size:12.5px; padding:2px 0; gap:8px; }
+
+.lt-lore-chip-row { display:flex; flex-wrap:wrap; gap:8px; }
+.lt-lore-chip { display:flex; align-items:center; gap:6px; background:var(--accent-soft); border:1px solid var(--accent); color:#fff; border-radius:16px; padding:6px 8px 6px 12px; font-size:12px; }
+.lt-lore-chip button { background:none; border:none; color:var(--muted); cursor:pointer; display:flex; }
+.lt-lore-pick-list { display:flex; flex-direction:column; gap:8px; }
+.lt-lore-pick-item { display:flex; align-items:center; justify-content:space-between; background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:12px; cursor:pointer; }
+.lt-lore-pick-item.on { border-color:var(--accent); background:var(--accent-soft); }
+.lt-lore-pick-title { font-size:13px; font-weight:700; }
+.lt-lore-pick-sub { font-size:11px; color:var(--muted); margin-top:2px; }
+.lt-lore-entry { background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:14px; display:flex; flex-direction:column; gap:12px; }
+.lt-lore-entry-head { display:flex; align-items:center; justify-content:space-between; font-size:12px; font-weight:700; color:var(--muted); }
+.lt-lore-entry-head button { background:none; border:none; color:var(--danger); cursor:pointer; display:flex; }
+
+.lt-shop-edit-item { display:flex; align-items:center; gap:10px; background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:10px; }
+.lt-shop-edit-thumb { width:52px; height:52px; border-radius:10px; background:var(--surface-2); display:flex; align-items:center; justify-content:center; color:var(--muted); overflow:hidden; cursor:pointer; flex-shrink:0; }
+.lt-shop-edit-thumb img { width:100%; height:100%; object-fit:cover; }
+.lt-shop-edit-fields { flex:1; display:flex; flex-direction:column; gap:6px; min-width:0; }
+.lt-shop-edit-fields input { background:var(--surface-2); border:1px solid var(--border); color:var(--text); border-radius:9px; padding:8px 10px; font-size:12.5px; outline:none; }
+.lt-shop-edit-cost { display:flex; align-items:center; gap:6px; }
+.lt-shop-edit-cost input { width:80px; background:var(--surface-2); border:1px solid var(--border); color:var(--text); border-radius:9px; padding:8px 10px; font-size:12.5px; outline:none; }
+.lt-job-edit-item-wrap { display:flex; flex-direction:column; gap:8px; background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:10px; }
+.lt-job-edit-item { display:flex; align-items:center; gap:10px; }
+.lt-job-edit-item input:first-child { flex:1; background:var(--surface-2); border:1px solid var(--border); color:var(--text); border-radius:9px; padding:8px 10px; font-size:12.5px; outline:none; }
+.lt-job-datetime-row { display:flex; gap:8px; }
+.lt-job-datetime-row input { flex:1; background:var(--surface-2); border:1px solid var(--border); color:var(--text); border-radius:9px; padding:8px 10px; font-size:12.5px; outline:none; }
+.lt-job-companion-row { display:flex; align-items:flex-start; gap:8px; padding-top:4px; border-top:1px solid var(--border); }
+.lt-job-companion-label { font-size:11px; color:var(--muted); flex-shrink:0; margin-top:6px; }
+.lt-job-companion-chips { display:flex; flex-wrap:wrap; gap:6px; }
+.lt-companion-chip { background:var(--surface-2); border:1px solid var(--border); color:var(--muted); border-radius:14px; padding:5px 10px; font-size:11px; cursor:pointer; }
+.lt-companion-chip.on { background:var(--accent-soft); border-color:var(--accent); color:#fff; }
+
+.lt-chat-header { display:flex; align-items:center; gap:9px; padding:10px 10px; border-bottom:1px solid var(--border); flex-shrink:0; position:sticky; top:0; z-index:6; background:var(--bg); }
+.lt-chat-header-text { flex:1; min-width:0; }
+.lt-chat-header-name { font-weight:700; font-size:13.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.lt-chat-header-sub { font-size:10.5px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+.lt-profile-pill-wrap { position:relative; }
+.lt-profile-pill { display:flex; align-items:center; gap:3px; background:var(--surface-2); border:1px solid var(--border); color:var(--text); border-radius:20px; padding:6px 10px; font-size:11.5px; cursor:pointer; white-space:nowrap; }
+.lt-profile-pick-menu { position:absolute; top:calc(100% + 6px); right:0; background:var(--surface-2); border:1px solid var(--border); border-radius:12px; overflow:hidden; z-index:20; min-width:130px; box-shadow:0 8px 24px rgba(0,0,0,0.4); }
+.lt-profile-pick-item { padding:10px 14px; font-size:12.5px; cursor:pointer; display:flex; align-items:center; gap:5px; }
+.lt-profile-pick-item.on { color: var(--accent); font-weight:700; }
+.lt-profile-pick-item.add { color:var(--muted); border-top:1px solid var(--border); }
+
+.lt-menu-overlay { position:absolute; inset:0; background:rgba(0,0,0,0.5); z-index:30; display:flex; justify-content:flex-end; }
+.lt-menu-panel { width: min(268px, 78%); height:100%; background:var(--surface); border-left:1px solid var(--border); padding:16px 6px; overflow-y:auto; }
+.lt-menu-credit-pill { margin: 2px 10px 10px; background:var(--accent-soft); border:1px solid var(--accent); color:#fff; border-radius:12px; padding:9px 12px; font-size:13px; font-weight:700; text-align:center; }
+.lt-menu-item { display:flex; align-items:center; gap:11px; width:100%; background:none; border:none; color:var(--text); padding:11px 12px; border-radius:12px; font-size:13px; cursor:pointer; text-align:left; }
+.lt-menu-item:active { background: var(--surface-2); }
+.lt-menu-item.danger { color: var(--danger); }
+.lt-menu-item-sub { font-size:10.5px; color:var(--muted); margin-top:2px; }
+.lt-menu-item-value { margin-left:auto; display:flex; align-items:center; gap:2px; font-size:11.5px; color:var(--muted); }
+.lt-menu-divider { height:1px; background:var(--border); margin:8px 6px; }
+
+.lt-fab-back { position:absolute; left:12px; bottom:74px; z-index:12; width:38px; height:38px; border-radius:50%; background:var(--surface-2); border:1px solid var(--border); color:var(--text); display:flex; align-items:center; justify-content:center; cursor:pointer; box-shadow:0 6px 18px rgba(0,0,0,0.4); opacity:0.85; }
+
+.lt-chat-scroll { position:relative; z-index:1; flex:1; overflow-y:auto; padding:14px; display:flex; flex-direction:column; gap:14px; }
+.lt-narration { display:flex; align-items:flex-start; gap:7px; background:rgba(22,22,28,0.85); border:1px solid var(--border); border-radius:12px; padding:10px 12px; font-size:12px; color:var(--muted); font-style:italic; line-height:1.6; }
+.lt-narration svg { flex-shrink:0; margin-top:2px; }
+
+.lt-turn-row { display:flex; align-items:flex-start; gap:8px; max-width:92%; }
+.lt-turn-row.user { align-self:flex-end; flex-direction:row-reverse; text-align:right; }
+.lt-turn-row.char { align-self:flex-start; }
+.lt-turn-text { display:flex; flex-direction:column; gap:2px; }
+.lt-turn-row.user .lt-turn-text { align-items:flex-end; }
+.lt-turn-name { font-size:11px; font-weight:700; color:var(--accent); }
+.lt-turn-row.user .lt-turn-name { color:#c9bcff; }
+.lt-turn-content { font-size:13.5px; line-height:1.65; white-space:pre-wrap; word-break:break-word; }
+.lt-turn-row.user .lt-turn-content { color:#e9e4ff; }
+.lt-action { color: var(--muted); font-style: italic; }
+.lt-turn-actions { display:flex; gap:6px; margin-top:3px; }
+.lt-msg-action { background:none; border:none; color:var(--muted); cursor:pointer; display:flex; align-items:center; padding:2px; opacity:0.7; }
+.lt-msg-action:hover { opacity:1; }
+
+.lt-typing { background:rgba(30,30,38,0.9); border:1px solid var(--border); padding:10px 13px; border-radius:16px; border-bottom-left-radius:4px; display:flex; align-items:center; gap:4px; }
+.lt-typing-label { font-size:10px; color:var(--muted); margin-right:6px; }
+.lt-typing span { width:5px; height:5px; border-radius:50%; background:var(--accent); opacity:0.5; animation: lt-bounce 1.1s infinite ease-in-out; }
+.lt-typing span:nth-child(2) { animation-delay:.15s; }
+.lt-typing span:nth-child(3) { animation-delay:.3s; }
+@keyframes lt-bounce { 0%,60%,100%{transform:translateY(0); opacity:.5;} 30%{transform:translateY(-4px); opacity:1;} }
+
+.lt-status-block { align-self:stretch; background:rgba(22,22,28,0.9); border:1px solid var(--border); border-left:2px solid var(--accent); border-radius:12px; padding:10px 14px; display:flex; flex-direction:column; gap:10px; font-size:12px; }
+.lt-status-toggle { display:flex; align-items:center; gap:6px; background:none; border:none; color:var(--text); font-size:12px; font-weight:700; cursor:pointer; padding:2px 0; }
+.lt-status-toggle span:first-of-type { flex:1; text-align:left; }
+.lt-status-scene { display:flex; flex-direction:column; gap:5px; padding-bottom:8px; border-bottom:1px solid var(--border); }
+.lt-status-row { display:flex; align-items:baseline; gap:6px; color:var(--muted); }
+.lt-status-row b { color:var(--text); font-weight:700; flex-shrink:0; }
+.lt-status-val { color:var(--muted); }
+.lt-status-char { display:flex; flex-direction:column; gap:5px; }
+.lt-status-char-name { font-weight:700; color:var(--accent); font-size:12.5px; }
+
+.lt-detail-sheet { position:absolute; left:0; right:0; bottom:0; max-height:78%; background:var(--surface); border-top:1px solid var(--border); border-radius:20px 20px 0 0; display:flex; flex-direction:column; box-shadow:0 -12px 30px rgba(0,0,0,0.4); }
+.lt-detail-head { display:flex; align-items:center; gap:12px; padding:16px; border-bottom:1px solid var(--border); }
+.lt-detail-name { flex:1; font-weight:800; font-size:16px; }
+.lt-detail-body { overflow-y:auto; padding:16px; }
+.lt-detail-desc { font-size:13px; color:var(--text); line-height:1.6; white-space:pre-wrap; }
+.lt-detail-memory-label { font-size:11.5px; font-weight:700; color:var(--muted); margin: 12px 0 6px; }
+.lt-detail-search { display:flex; align-items:center; gap:8px; background:var(--surface-2); border:1px solid var(--border); border-radius:12px; padding:9px 12px; margin-bottom:14px; color:var(--muted); }
+.lt-detail-search input { flex:1; background:none; border:none; color:var(--text); font-size:13px; outline:none; }
+.lt-detail-search button { background:none; border:none; color:var(--muted); cursor:pointer; display:flex; }
+.lt-memory-list { display:flex; flex-direction:column; gap:8px; list-style:none; padding:0; margin:0; }
+.lt-memory-list li { font-size:12.5px; line-height:1.6; padding:9px 11px; background:var(--surface-2); border-left:2px solid var(--accent); border-radius:0 8px 8px 0; }
+.lt-inventory-detail-img { width:100%; max-height:160px; object-fit:contain; border-radius:12px; background:var(--surface-2); margin-bottom:12px; }
+.lt-inventory-actions { display:flex; gap:8px; margin-top:14px; }
+.lt-inventory-actions .lt-btn { flex:1; justify-content:center; }
+
+.lt-adjust-body { padding:16px; display:flex; flex-direction:column; gap:14px; align-items:center; overflow-y:auto; }
+.lt-adjust-preview { width:180px; height:180px; border-radius:50%; overflow:hidden; position:relative; background:var(--surface-2); cursor:grab; touch-action:none; flex-shrink:0; }
+.lt-adjust-preview img { width:100%; height:100%; object-fit:cover; user-select:none; -webkit-user-drag:none; }
+
+.lt-credit-pill { background:var(--accent-soft); border:1px solid var(--accent); color:#fff; border-radius:12px; padding:5px 10px; font-size:12px; font-weight:700; margin-left:auto; margin-right:6px; }
+.lt-affection-row { display:flex; align-items:center; gap:10px; padding:9px 0; border-bottom:1px solid var(--border); }
+.lt-affection-row:last-of-type { border-bottom:none; }
+.lt-affection-info { flex:1; min-width:0; }
+.lt-affection-name { font-size:12.5px; font-weight:700; margin-bottom:4px; }
+.lt-affection-bar { height:6px; border-radius:4px; background:var(--surface-2); overflow:hidden; }
+.lt-affection-bar-fill { height:100%; border-radius:4px; transition:width .3s ease; }
+.lt-affection-value { font-size:11.5px; font-weight:700; flex-shrink:0; }
+
+.lt-job-row { display:flex; align-items:center; justify-content:space-between; background:var(--surface-2); border:1px solid var(--border); border-radius:12px; padding:12px; margin-bottom:8px; gap:10px; }
+.lt-job-name { font-size:13px; font-weight:600; }
+.lt-job-companions-preview { font-size:11px; color:var(--muted); margin-top:2px; }
+
+.lt-shop-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:10px; }
+.lt-shop-card { display:flex; flex-direction:column; align-items:center; gap:6px; background:var(--surface-2); border:1px solid var(--border); border-radius:12px; padding:10px; cursor:pointer; }
+.lt-shop-card img { width:56px; height:56px; border-radius:10px; object-fit:cover; }
+.lt-shop-card-noimg { width:56px; height:56px; border-radius:10px; background:var(--surface); display:flex; align-items:center; justify-content:center; color:var(--muted); }
+.lt-shop-card-name { font-size:12px; font-weight:600; text-align:center; }
+
+.lt-gift-recipient-row { display:flex; align-items:center; gap:12px; padding:12px 4px; border-bottom:1px solid var(--border); cursor:pointer; }
+.lt-gift-recipient-row:last-of-type { border-bottom:none; }
+.lt-gift-recipient-row span { font-size:13px; font-weight:600; }
+
+.lt-bookmark-row { display:flex; align-items:center; gap:10px; padding:10px 4px; border-bottom:1px solid var(--border); cursor:pointer; color:var(--accent); }
+.lt-bookmark-row:last-of-type { border-bottom:none; }
+.lt-bookmark-text { flex:1; min-width:0; }
+.lt-bookmark-speaker { font-size:11.5px; font-weight:700; color:var(--text); }
+.lt-bookmark-preview { font-size:11.5px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.lt-bookmark-row button { background:none; border:none; color:var(--muted); cursor:pointer; }
+
+.lt-delete-select { border-radius:12px; cursor:pointer; transition:background .15s; padding:2px; }
+.lt-delete-select:hover { background:rgba(124,92,255,0.08); }
+.lt-delete-select.selected { background:rgba(229,96,122,0.16); outline:1px solid var(--danger); }
+.lt-delete-bar { justify-content:space-between; }
+.lt-highlight { animation: lt-highlight-pulse 1.6s ease; border-radius:12px; }
+@keyframes lt-highlight-pulse { 0%,100%{ background:transparent; } 30%{ background:rgba(124,92,255,0.25); } }
+
+.lt-input-bar { display:flex; align-items:center; gap:7px; padding:10px 12px; border-top:1px solid var(--border); flex-shrink:0; }
+.lt-action-toggle { width:34px; height:34px; border-radius:50%; flex-shrink:0; background:var(--surface-2); border:1px solid var(--border); color:var(--muted); font-weight:800; font-size:16px; cursor:pointer; }
+.lt-action-toggle.on { background:var(--accent-soft); border-color:var(--accent); color:var(--accent); }
+.lt-input-bar input { flex:1; background:var(--surface); border:1px solid var(--border); color:var(--text); border-radius:20px; padding:10px 15px; font-size:13px; outline:none; font-family:inherit; min-width:0; }
+.lt-input-bar input:focus { border-color: var(--accent); }
+.lt-send { width:36px; height:36px; border-radius:50%; flex-shrink:0; background:linear-gradient(135deg,var(--accent),#6a4ae0); color:#fff; border:none; display:flex; align-items:center; justify-content:center; cursor:pointer; }
+.lt-send:disabled { opacity:0.6; }
+
+.lt-toast { position:absolute; bottom:78px; left:50%; transform:translateX(-50%); background:#26262f; border:1px solid var(--border); color:#fff; font-size:12px; padding:9px 16px; border-radius:20px; z-index:60; box-shadow:0 8px 24px rgba(0,0,0,0.4); }
+
+.lt-confirm-overlay { position:absolute; inset:0; background:rgba(0,0,0,0.55); z-index:80; display:flex; align-items:center; justify-content:center; padding:24px; }
+.lt-confirm-box { background:var(--surface); border:1px solid var(--border); border-radius:16px; padding:20px 18px 16px; width:100%; max-width:280px; box-shadow:0 12px 30px rgba(0,0,0,0.5); }
+.lt-confirm-msg { font-size:13.5px; line-height:1.6; margin-bottom:16px; text-align:center; }
+.lt-confirm-actions { display:flex; gap:8px; }
+.lt-confirm-actions .lt-btn { flex:1; justify-content:center; }
+`;
+
+/* ============================================================
+   API 키 입력 화면 - 독립 실행(GitHub Pages 등)용
+============================================================ */
+function ApiKeyGate() {
+  const [key, setKey] = useState(getApiKey());
+  const [saved, setSaved] = useState(!!getApiKey());
+  const [showChange, setShowChange] = useState(false);
+
+  if (saved && !showChange) {
+    return (
+      <div style={{ position: "relative", width: "100%", height: "100%" }}>
+        <LampTalkApp />
+        <button
+          onClick={() => setShowChange(true)}
+          style={{
+            position: "fixed", right: 10, bottom: 10, zIndex: 999,
+            width: 30, height: 30, borderRadius: "50%", background: "#1e1e26",
+            border: "1px solid #2a2a34", color: "#8d8b9c", fontSize: 13, opacity: 0.55,
+          }}
+          title="API 키 변경"
+        >⚙</button>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{
+      minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center",
+      justifyContent: "center", padding: 24, background: "#0a0a0e", color: "#f2f1f5",
+      fontFamily: "'Pretendard','Noto Sans KR',-apple-system,sans-serif", gap: 14, textAlign: "center",
+    }}>
+      <div style={{ fontSize: 28 }}>✨</div>
+      <h2 style={{ margin: 0 }}>램프토크 - API 키 설정</h2>
+      <p style={{ color: "#8d8b9c", fontSize: 13, lineHeight: 1.6, maxWidth: 320 }}>
+        console.anthropic.com 에서 발급받은 본인 API 키를 입력하세요.<br />
+        이 키는 이 브라우저(폰)에만 저장되고, 절대 다른 곳으로 전송되지 않아요.<br />
+        <b style={{ color: "#e5607a" }}>이 페이지 링크를 절대 남에게 공유하지 마세요.</b>
+      </p>
+      <input
+        value={key}
+        onChange={(e) => setKey(e.target.value)}
+        placeholder="sk-ant-..."
+        style={{
+          width: "100%", maxWidth: 320, background: "#16161c", border: "1px solid #2a2a34",
+          color: "#f2f1f5", borderRadius: 12, padding: "12px 14px", fontSize: 14, outline: "none",
+        }}
+      />
+      <button
+        onClick={() => { localStorage.setItem("lamptalk:apiKey", key.trim()); setSaved(true); setShowChange(false); }}
+        disabled={!key.trim()}
+        style={{
+          background: "linear-gradient(135deg,#7c5cff,#6a4ae0)", border: "none", color: "#fff",
+          borderRadius: 12, padding: "12px 24px", fontSize: 14, fontWeight: 700, cursor: "pointer",
+          opacity: key.trim() ? 1 : 0.5,
+        }}
+      >저장하고 시작하기</button>
+      {saved && (
+        <button onClick={() => setShowChange(false)} style={{ background: "none", border: "none", color: "#8d8b9c", fontSize: 12.5, textDecoration: "underline", cursor: "pointer" }}>
+          취소
+        </button>
+      )}
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<ApiKeyGate />);
+</script>
+</body>
+</html>
